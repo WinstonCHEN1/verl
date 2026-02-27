@@ -17,7 +17,13 @@ from typing import Any, Optional
 
 from verl.base_config import BaseConfig
 
-__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "RolloutCorrectionConfig"]
+__all__ = [
+    "AlgoConfig",
+    "FilterGroupsConfig",
+    "KLControlConfig",
+    "RolloutCorrectionConfig",
+    "TeacherStepRewardConfig",
+]
 
 
 @dataclass
@@ -565,6 +571,44 @@ class RolloutCorrectionConfig(BaseConfig):
 
 
 @dataclass
+class TeacherStepRewardConfig(BaseConfig):
+    """Configuration for teacher-step proxy reward.
+
+    The reward approximates gradient alignment with a teacher trajectory using
+    forward-pass quantities:
+        freq_teacher(y_t) - pi(y_t) + ||pi_t||_2^2
+
+    Args:
+        enable (bool): Whether to enable teacher-step proxy reward.
+        teacher_sequence_key (str): Key in non_tensor `reward_model` used as teacher sequence.
+            Falls back to ``ground_truth`` if not found.
+        freq_coef (float): Coefficient for teacher token frequency term.
+        pi_coef (float): Coefficient for student sampled-token probability term.
+        sum_pi_squared_coef (float): Coefficient for ||pi_t||_2^2 term.
+            Requires actor.calculate_sum_pi_squared=True.
+        teacher_avg_prob_coef (float): Coefficient for subtracting AvgProb(teacher) proxy term.
+        teacher_avg_prob_mode (str): AvgProb proxy mode.
+            - ``"seq_freq_mean"``: use sequence mean of freq_teacher(y_t) as AvgProb proxy.
+            - ``"none"``: disable AvgProb proxy term.
+        mix_rm_coef (float): Weight for existing RM reward when mixing:
+            reward = proxy + mix_rm_coef * rm_reward.
+        normalize_per_sequence (bool): If True, z-normalize proxy reward on valid response tokens per sequence.
+        eps (float): Numerical epsilon.
+    """
+
+    enable: bool = False
+    teacher_sequence_key: str = "ground_truth"
+    freq_coef: float = 1.0
+    pi_coef: float = 1.0
+    sum_pi_squared_coef: float = 1.0
+    teacher_avg_prob_coef: float = 1.0
+    teacher_avg_prob_mode: str = "seq_freq_mean"
+    mix_rm_coef: float = 0.0
+    normalize_per_sequence: bool = False
+    eps: float = 1e-6
+
+
+@dataclass
 class AlgoConfig(BaseConfig):
     """Configuration for the algorithm.
 
@@ -612,3 +656,4 @@ class AlgoConfig(BaseConfig):
     # Rollout Correction: corrects off-policy issues (policy mismatch, model staleness, distribution shifts)
     # Set to None to disable, use RolloutCorrectionConfig presets (e.g., .tis(), .mis()), or pass dict
     rollout_correction: Optional[RolloutCorrectionConfig] = None
+    teacher_step_reward: TeacherStepRewardConfig = field(default_factory=TeacherStepRewardConfig)

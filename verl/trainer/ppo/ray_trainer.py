@@ -50,6 +50,7 @@ from verl.trainer.ppo.metric_utils import (
     process_validation_metrics,
 )
 from verl.trainer.ppo.reward import extract_reward
+from verl.trainer.ppo.teacher_step_reward import compute_teacher_step_proxy_reward
 from verl.trainer.ppo.utils import Role, WorkerType, need_critic, need_reference_policy, need_reward_model
 from verl.utils import tensordict_utils as tu
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, should_save_ckpt_esi
@@ -303,8 +304,6 @@ class RayPPOTrainer:
 
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
-        self.checkpoint_manager = None
-
     def _create_dataloader(self, train_dataset, val_dataset, collate_fn, train_sampler: Optional[Sampler]):
         """
         Creates the train and validation dataloaders.
@@ -494,6 +493,19 @@ class RayPPOTrainer:
         assert self.reward_loop_manager is not None, "RewardLoopManager is None"
         batch_reward = self.reward_loop_manager.compute_rm_score(batch)
         return batch_reward
+
+    def _compute_teacher_step_reward(self, batch: DataProto) -> tuple[torch.Tensor, dict[str, float]]:
+        cfg = self.config.algorithm.teacher_step_reward
+        reward_model_items = batch.non_tensor_batch.get("reward_model", None)
+        return compute_teacher_step_proxy_reward(
+            responses=batch.batch["responses"],
+            response_mask=batch.batch["response_mask"],
+            old_log_probs=batch.batch["old_log_probs"],
+            sum_pi_squared=batch.batch.get("sum_pi_squared", None),
+            reward_model_items=reward_model_items,
+            tokenizer=self.tokenizer,
+            cfg=cfg,
+        )
 
     def _validate(self, merged: bool = False):
         data_source_lst = []
@@ -838,9 +850,8 @@ class RayPPOTrainer:
             reward_loop_worker_handles=reward_loop_worker_handles,
         )
 
-        checkpoint_engine_config = omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
         self.checkpoint_manager = CheckpointEngineManager(
-            config=checkpoint_engine_config,
+            backend=self.config.actor_rollout_ref.rollout.checkpoint_engine.backend,
             trainer=self.actor_rollout_wg,
             replicas=self.async_rollout_manager.rollout_replicas,
         )
@@ -1424,6 +1435,16 @@ class RayPPOTrainer:
                                 metrics.update(calculate_debug_metrics(batch))
 
                     assert "old_log_probs" in batch.batch, f'"old_log_prob" not in {batch.batch.keys()=}'
+
+                    teacher_step_reward_cfg = self.config.algorithm.teacher_step_reward
+                    if teacher_step_reward_cfg.enable:
+                        teacher_reward_tensor, teacher_reward_metrics = self._compute_teacher_step_reward(batch)
+                        metrics.update(teacher_reward_metrics)
+                        mix_rm_coef = float(teacher_step_reward_cfg.mix_rm_coef)
+                        if mix_rm_coef != 0.0:
+                            reward_tensor = teacher_reward_tensor + mix_rm_coef * reward_tensor
+                        else:
+                            reward_tensor = teacher_reward_tensor
 
                     if self.use_reference_policy:
                         # compute reference log_prob

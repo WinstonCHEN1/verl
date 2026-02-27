@@ -111,6 +111,39 @@ algorithm:
     # Power used for weight scaling in "pow" method
     weight_pow: 2.0
 
+  # Teacher-step proxy reward (gradient-alignment inspired, forward-only proxy)
+  teacher_step_reward:
+
+    # Whether to enable teacher-step proxy reward
+    enable: False
+
+    # Key under non-tensor reward_model dict to read teacher sequence
+    # Falls back to "ground_truth" when missing
+    teacher_sequence_key: ground_truth
+
+    # Coefficients in: freq_teacher(y_t) - pi(y_t) + ||pi_t||_2^2
+    freq_coef: 1.0
+
+    pi_coef: 1.0
+
+    sum_pi_squared_coef: 1.0
+
+    # Coefficient for -AvgProb(teacher) proxy term
+    teacher_avg_prob_coef: 1.0
+
+    # AvgProb proxy mode: seq_freq_mean | none
+    teacher_avg_prob_mode: seq_freq_mean
+
+    # Mix with existing rm reward:
+    # final_reward = proxy_reward + mix_rm_coef * rm_reward
+    mix_rm_coef: 0.0
+
+    # Whether to z-normalize proxy reward on each sequence
+    normalize_per_sequence: False
+
+    # Numerical epsilon
+    eps: 1e-6
+
 # config for the trainer
 trainer:
 

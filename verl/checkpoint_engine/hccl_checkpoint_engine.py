@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import asyncio
 import logging
 import os
 import time
@@ -66,7 +67,8 @@ class BroadcastOperation:
         self.socket = socket
         self.topic = topic
 
-        self._run()
+        loop = asyncio.get_running_loop()
+        self._task = loop.run_in_executor(None, self._run)
 
     def _run(self):
         # broadcast tensor meta via zeromq PUB/SUB
@@ -86,6 +88,7 @@ class BroadcastOperation:
         Returns:
             dict[str, TensorMeta]: The bucket meta after broadcast.
         """
+        await self._task
         return self.metadata
 
 
@@ -145,7 +148,6 @@ class HCCLCheckpointEngine(CheckpointEngine):
 
         self.send_buf = None
         self.recv_buf = None
-        torch.npu.empty_cache()
 
     @classmethod
     def build_topology(cls, trainer_world_size: int, rollout_world_size: int, metadata: list[dict]):

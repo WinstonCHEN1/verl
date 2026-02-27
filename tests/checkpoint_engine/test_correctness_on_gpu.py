@@ -23,14 +23,12 @@ from verl.single_controller.ray.base import (
     split_resource_pool,
 )
 from verl.utils.device import get_device_name
-from verl.utils.ray_utils import auto_await
 from verl.workers.config import CheckpointEngineConfig, HFModelConfig, RolloutConfig
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rebuild_group", [False, True])
 @pytest.mark.parametrize("num_trainer, num_rollout", [(2, 6)])
-@auto_await
 async def test_nccl_checkpoint_engine(
     rebuild_group,
     num_trainer,
@@ -67,7 +65,7 @@ async def test_nccl_checkpoint_engine(
     rollout, replicas = await create_rollout_worker_group(rollout_pool, model_config, rollout_config, check_allclose)
 
     # create checkpoint engine manager
-    checkpoint_manager = CheckpointEngineManager(config=checkpoint_engine_config, trainer=trainer, replicas=replicas)
+    checkpoint_manager = CheckpointEngineManager(backend="nccl", trainer=trainer, replicas=replicas)
     for _ in range(3):
         await checkpoint_manager.update_weights()
         rollout.check_weights()
@@ -79,7 +77,6 @@ async def test_nccl_checkpoint_engine(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("device", ["cuda", "cpu"])
 @pytest.mark.parametrize("num_trainer, num_rollout", [(2, 6)])
-@auto_await
 async def test_nixl_checkpoint_engine(
     num_trainer,
     num_rollout,
@@ -123,7 +120,7 @@ async def test_nixl_checkpoint_engine(
     rollout, replicas = await create_rollout_worker_group(rollout_pool, model_config, rollout_config, check_allclose)
 
     # create checkpoint engine manager
-    checkpoint_manager = CheckpointEngineManager(config=checkpoint_engine_config, trainer=trainer, replicas=replicas)
+    checkpoint_manager = CheckpointEngineManager(backend="nixl", trainer=trainer, replicas=replicas)
     for _ in range(3):
         await checkpoint_manager.update_weights()
         rollout.check_weights()
@@ -135,7 +132,6 @@ async def test_nixl_checkpoint_engine(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rebuild_group", [False])
 @pytest.mark.parametrize("num_trainer, num_rollout", [(2, 6)])
-@auto_await
 async def test_kimi_checkpoint_engine(
     rebuild_group,
     num_trainer,

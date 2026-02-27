@@ -14,7 +14,6 @@
 
 import functools
 import os
-from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import torch
@@ -35,11 +34,7 @@ def get_torch_profiler(
 
     os.makedirs(save_path, exist_ok=True)
 
-    current_time = datetime.now(tz=timezone.utc).astimezone()
-    timestamp = current_time.strftime("%Y%m%d%H%M%S%f")[:-3]
-    pid = os.getpid()
-
-    save_file_name = f"prof_rank-{rank}_{pid}_{timestamp}.json.gz"
+    save_file_name = f"prof_rank-{rank}.json.gz"
     if save_file_prefix:
         save_file_name = f"{save_file_prefix}_{save_file_name}"
     save_path = os.path.join(save_path, save_file_name)

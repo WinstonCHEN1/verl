@@ -43,11 +43,18 @@ SGLang 是当前主流的高性能开源推理引擎, 昇腾已经全面原生�
 ^^^^^^^^^^^
 **下载模型权重**
 
-Qwen3-30B: https://huggingface.co/Qwen/Qwen3-30B-A3B
+--local-dir: 模型保存路径
+
+.. code-block:: bash
+
+  export HF_ENDPOINT=https://hf-mirror.com
+  hf download --resume-download Qwen/Qwen3-30B-A3B --local-dir /path/to/local_dir
 
 **下载数据集**
 
-DAPO-Math-17k: https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k
+.. code-block:: bash
+
+  git clone https://www.modelscope.cn/datasets/AI-ModelScope/DAPO-Math-17k.git
 
 **HuggingFace To Megatron权重转换(可选)**
 
