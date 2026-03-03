@@ -77,14 +77,20 @@ class DataParallelPPOActor(BasePPOActor):
         )
         self.device_name = get_device_name()
 
-    def _forward_micro_batch(
-        self, micro_batch, temperature, calculate_entropy=False
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.config.get("calculate_sum_pi_squared", False):
+            self.calculate_sum_pi_squared_from_logits = (
+                torch.compile(verl_F.calculate_sum_pi_squared_from_logits, dynamic=True)
+                if self.config.get("use_torch_compile", True)
+                else verl_F.calculate_sum_pi_squared_from_logits
+            )
+
+    def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> dict[str, torch.Tensor]:
         """
         Returns:
-            entropy: # (bs, response_len)
-            log_probs: # (bs, response_len)
+            dict[str, torch.Tensor]: Contains ``log_probs`` and optional ``entropys`` / ``sum_pi_squared``.
         """
+        calculate_sum_pi_squared = self.config.get("calculate_sum_pi_squared", False)
+        sum_pi_squared_checkpointing = self.config.get("sum_pi_squared_checkpointing", False)
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
@@ -199,6 +205,13 @@ class DataParallelPPOActor(BasePPOActor):
                             entropy_rmpad = torch.utils.checkpoint.checkpoint(
                                 self.compute_entropy_from_logits, logits_rmpad
                             )
+                    if calculate_sum_pi_squared:
+                        if not sum_pi_squared_checkpointing:
+                            sum_pi_squared_rmpad = self.calculate_sum_pi_squared_from_logits(logits_rmpad)
+                        else:
+                            sum_pi_squared_rmpad = torch.utils.checkpoint.checkpoint(
+                                self.calculate_sum_pi_squared_from_logits, logits_rmpad
+                            )
 
                 # gather log_prob if sp > 1
                 if self.use_ulysses_sp:
@@ -216,10 +229,21 @@ class DataParallelPPOActor(BasePPOActor):
                             unpad_dim=0,
                             padding_size=pad_size,
                         )
+                    if calculate_sum_pi_squared:
+                        sum_pi_squared_rmpad = gather_outputs_and_unpad(
+                            sum_pi_squared_rmpad, gather_dim=0, unpad_dim=0, padding_size=pad_size
+                        )
                 # pad back to (bsz, seqlen)
                 if calculate_entropy:
                     full_entropy = pad_input(
                         hidden_states=entropy_rmpad.unsqueeze(-1),
+                        indices=indices,
+                        batch=batch_size,
+                        seqlen=seqlen,
+                    )
+                if calculate_sum_pi_squared:
+                    full_sum_pi_squared = pad_input(
+                        hidden_states=sum_pi_squared_rmpad.unsqueeze(-1),
                         indices=indices,
                         batch=batch_size,
                         seqlen=seqlen,
@@ -234,6 +258,8 @@ class DataParallelPPOActor(BasePPOActor):
                 # only return response part:
                 if calculate_entropy:
                     entropy = full_entropy.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
+                if calculate_sum_pi_squared:
+                    sum_pi_squared = full_sum_pi_squared.squeeze(-1)[:, -response_length - 1 : -1]
                 log_probs = full_log_probs.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
 
             else:  # not using rmpad and no ulysses sp
@@ -266,8 +292,20 @@ class DataParallelPPOActor(BasePPOActor):
                             entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
                         else:
                             entropy = torch.utils.checkpoint.checkpoint(verl_F.entropy_from_logits, logits)
+                    if calculate_sum_pi_squared:
+                        if not sum_pi_squared_checkpointing:
+                            sum_pi_squared = self.calculate_sum_pi_squared_from_logits(logits)
+                        else:
+                            sum_pi_squared = torch.utils.checkpoint.checkpoint(
+                                self.calculate_sum_pi_squared_from_logits, logits
+                            )
 
-            return entropy, log_probs
+            outputs = {"log_probs": log_probs}
+            if calculate_entropy:
+                outputs["entropys"] = entropy
+            if calculate_sum_pi_squared:
+                outputs["sum_pi_squared"] = sum_pi_squared
+            return outputs
 
     def _optimizer_step(self):
         assert self.config.grad_clip is not None
@@ -288,7 +326,7 @@ class DataParallelPPOActor(BasePPOActor):
         return grad_norm
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
-    def compute_log_prob(self, data: DataProto, calculate_entropy=False) -> torch.Tensor:
+    def compute_log_prob(self, data: DataProto, calculate_entropy=False) -> dict[str, torch.Tensor]:
         """Compute the log probability of the responses given input_ids, attention_mask and position_ids
 
         Args:
@@ -304,8 +342,9 @@ class DataParallelPPOActor(BasePPOActor):
                 ``responses``:  tensor of shape [batch_size, response_length]. torch.int64.
 
         Returns:
-            torch.Tensor: the log_prob tensor
+            dict[str, torch.Tensor]: the log_prob tensor and optional auxiliary tensors.
         """
+        calculate_sum_pi_squared = self.config.get("calculate_sum_pi_squared", False)
         # set to eval
         self.actor_module.eval()
 
@@ -326,27 +365,38 @@ class DataParallelPPOActor(BasePPOActor):
 
         log_probs_lst = []
         entropy_lst = []
+        sum_pi_squared_lst = []
         for micro_batch in micro_batches:
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
             with torch.no_grad():
-                entropy, log_probs = self._forward_micro_batch(
+                outputs = self._forward_micro_batch(
                     model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
                 )
-            log_probs_lst.append(log_probs)
+            log_probs_lst.append(outputs["log_probs"])
             if calculate_entropy:
-                entropy_lst.append(entropy)
+                entropy_lst.append(outputs["entropys"])
+            if calculate_sum_pi_squared:
+                sum_pi_squared_lst.append(outputs["sum_pi_squared"])
 
         log_probs = torch.concat(log_probs_lst, dim=0)
-        entropys = None
         if calculate_entropy:
             entropys = torch.concat(entropy_lst, dim=0)
+        if calculate_sum_pi_squared:
+            sum_pi_squared = torch.concat(sum_pi_squared_lst, dim=0)
 
         if use_dynamic_bsz:
             log_probs = restore_dynamic_batch(log_probs, batch_idx_list)
             if calculate_entropy:
                 entropys = restore_dynamic_batch(entropys, batch_idx_list)
+            if calculate_sum_pi_squared:
+                sum_pi_squared = restore_dynamic_batch(sum_pi_squared, batch_idx_list)
 
-        return log_probs, entropys
+        outputs = {"log_probs": log_probs}
+        if calculate_entropy:
+            outputs["entropys"] = entropys
+        if calculate_sum_pi_squared:
+            outputs["sum_pi_squared"] = sum_pi_squared
+        return outputs
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
     def update_policy(self, data: DataProto):

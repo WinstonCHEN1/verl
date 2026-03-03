@@ -51,7 +51,8 @@ from verl.trainer.ppo.metric_utils import (
     compute_timing_metrics,
     process_validation_metrics,
 )
-from verl.trainer.ppo.reward import compute_reward, compute_reward_async
+from verl.trainer.ppo.reward import compute_reward, compute_reward_async, extract_reward
+from verl.trainer.ppo.teacher_step_reward import compute_teacher_step_proxy_reward
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, should_save_ckpt_esi
 from verl.utils.debug import marked_timer
 from verl.utils.metric import (
@@ -680,6 +681,19 @@ class RayPPOTrainer:
         # Log to each configured logger
         self.validation_generations_logger.log(self.config.trainer.logger, samples, self.global_steps)
 
+    def _compute_teacher_step_reward(self, batch: DataProto) -> tuple[torch.Tensor, dict[str, float]]:
+        cfg = self.config.algorithm.teacher_step_reward
+        reward_model_items = batch.non_tensor_batch.get("reward_model", None)
+        return compute_teacher_step_proxy_reward(
+            responses=batch.batch["responses"],
+            response_mask=batch.batch["response_mask"],
+            old_log_probs=batch.batch["old_log_probs"],
+            sum_pi_squared=batch.batch.get("sum_pi_squared", None),
+            reward_model_items=reward_model_items,
+            tokenizer=self.tokenizer,
+            cfg=cfg,
+        )
+
     def _validate(self):
         data_source_lst = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
@@ -1215,8 +1229,8 @@ class RayPPOTrainer:
                     with marked_timer("reward", timing_raw, color="yellow"):
                         # compute reward model score
                         if self.use_rm:
-                            reward_tensor = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(reward_tensor)
+                            batch_reward = self.rm_wg.compute_rm_score(batch)
+                            batch = batch.union(batch_reward)
 
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
@@ -1279,6 +1293,19 @@ class RayPPOTrainer:
                         reward_extra_infos_dict: dict[str, list]
                         if self.config.reward_model.launch_reward_fn_async:
                             reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
+                        elif self.use_rm:
+                            reward_tensor, reward_extra_infos_dict = extract_reward(batch)
+
+                        teacher_step_reward_cfg = self.config.algorithm.teacher_step_reward
+                        if teacher_step_reward_cfg.enable:
+                            teacher_reward_tensor, teacher_reward_metrics = self._compute_teacher_step_reward(batch)
+                            metrics.update(teacher_reward_metrics)
+                            mix_rm_coef = float(teacher_step_reward_cfg.mix_rm_coef)
+                            if mix_rm_coef != 0.0:
+                                reward_tensor = teacher_reward_tensor + mix_rm_coef * reward_tensor
+                            else:
+                                reward_tensor = teacher_reward_tensor
+
                         batch.batch["token_level_scores"] = reward_tensor
 
                         if reward_extra_infos_dict:

@@ -13,9 +13,17 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from verl.base_config import BaseConfig
+
+__all__ = [
+    "AlgoConfig",
+    "FilterGroupsConfig",
+    "KLControlConfig",
+    "PFPPOConfig",
+    "TeacherStepRewardConfig",
+]
 
 
 @dataclass
@@ -74,6 +82,22 @@ class FilterGroupsConfig(BaseConfig):
 
 
 @dataclass
+class TeacherStepRewardConfig(BaseConfig):
+    """Configuration for teacher-step proxy reward."""
+
+    enable: bool = False
+    teacher_sequence_key: str = "ground_truth"
+    freq_coef: float = 1.0
+    pi_coef: float = 1.0
+    sum_pi_squared_coef: float = 1.0
+    teacher_avg_prob_coef: float = 1.0
+    teacher_avg_prob_mode: str = "seq_freq_mean"
+    mix_rm_coef: float = 0.0
+    normalize_per_sequence: bool = False
+    eps: float = 1e-6
+
+
+@dataclass
 class AlgoConfig(BaseConfig):
     """Configuration for the algorithm.
 
@@ -88,8 +112,9 @@ class AlgoConfig(BaseConfig):
         kl_penalty (str): How to estimate KL divergence: "kl", "abs", "mse", "low_var_kl", or "full".
         kl_ctrl (KLControlConfig): KL control configuration.
         use_pf_ppo (bool): Whether to enable preference feedback PPO.
-        pf_ppo (Optional[PFPPOConfig]): Preference feedback PPO settings.
+        pf_ppo (dict[str, Any]): Preference feedback PPO settings.
         filter_groups (Optional[FilterGroupsConfig]): Filter groups configuration, used in DAPO and Entropy
+        teacher_step_reward (TeacherStepRewardConfig): Teacher-step proxy reward configuration.
     """
 
     _frozen_fields = [
@@ -110,5 +135,6 @@ class AlgoConfig(BaseConfig):
     kl_penalty: str = "kl"
     kl_ctrl: KLControlConfig = field(default_factory=KLControlConfig)
     use_pf_ppo: bool = False
-    pf_ppo: Optional[PFPPOConfig] = None
+    pf_ppo: dict[str, Any] = field(default_factory=dict)
     filter_groups: Optional[FilterGroupsConfig] = None
+    teacher_step_reward: TeacherStepRewardConfig = field(default_factory=TeacherStepRewardConfig)

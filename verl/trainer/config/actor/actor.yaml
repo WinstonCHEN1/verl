@@ -72,6 +72,12 @@ use_kl_loss: false
 # oc.select: the default val for ref.use_torch_compile
 use_torch_compile: true
 
+# Whether to compute sum of squared probabilities during log-prob recomputation
+calculate_sum_pi_squared: False
+
+# Enable gradient checkpointing for sum_pi_squared computation
+sum_pi_squared_checkpointing: False
+
 # KL loss coefficient when use_kl_loss is enabled. For GRPO
 kl_loss_coef: 0.001
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .algorithm import AlgoConfig, FilterGroupsConfig, KLControlConfig, PFPPOConfig
+from .algorithm import AlgoConfig, FilterGroupsConfig, KLControlConfig, PFPPOConfig, TeacherStepRewardConfig
 from .config import CriticConfig, FSDPCriticConfig, MegatronCriticConfig
 
 __all__ = [
@@ -23,4 +23,5 @@ __all__ = [
     "KLControlConfig",
     "MegatronCriticConfig",
     "PFPPOConfig",
+    "TeacherStepRewardConfig",
 ]

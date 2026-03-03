@@ -177,3 +177,13 @@ def compute_reward_async(data: DataProto, config=None, tokenizer=None, reward_fn
         )
 
     return compute_reward(data, reward_fn)
+
+
+def extract_reward(batch: DataProto):
+    """
+    Extract reward tensor and extra info from batch data.
+    """
+    reward_tensor = batch.batch["rm_scores"]
+    reward_extra_keys = batch.meta_info.get("reward_extra_keys", [])
+    reward_extra_infos_dict = {key: batch.non_tensor_batch[key] for key in reward_extra_keys}
+    return reward_tensor, reward_extra_infos_dict
