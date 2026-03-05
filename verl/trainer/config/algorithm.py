@@ -86,7 +86,7 @@ class TeacherStepRewardConfig(BaseConfig):
     """Configuration for teacher-step proxy reward."""
 
     enable: bool = False
-    teacher_sequence_key: str = "ground_truth"
+    teacher_sequence_key: str = "teacher_sequence"
     freq_coef: float = 1.0
     pi_coef: float = 1.0
     sum_pi_squared_coef: float = 1.0

@@ -814,6 +814,21 @@ class RayPPOTrainer:
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_inputs, reward_extra_infos_dict)
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
+            # If acc exists, expose only one core accuracy metric for this data source.
+            # This keeps validation reporting concise for classification-style tasks (e.g., MMLU).
+            if "acc" in var2metric2val:
+                acc_metric2val = var2metric2val["acc"]
+                n_max = max([int(name.split("@")[-1].split("/")[0]) for name in acc_metric2val.keys()])
+                mean_key = f"mean@{n_max}"
+                if mean_key in acc_metric2val:
+                    metric_dict[f"val-core/{data_source}/acc"] = acc_metric2val[mean_key]
+                else:
+                    # Fallback to any metric at max-N if mean is absent.
+                    fallback_items = [(k, v) for k, v in acc_metric2val.items() if f"@{n_max}" in k]
+                    if len(fallback_items) > 0:
+                        metric_dict[f"val-core/{data_source}/acc"] = fallback_items[0][1]
+                continue
+
             core_var = "acc" if "acc" in var2metric2val else "reward"
             for var_name, metric2val in var2metric2val.items():
                 n_max = max([int(name.split("@")[-1].split("/")[0]) for name in metric2val.keys()])
@@ -1227,15 +1242,28 @@ class RayPPOTrainer:
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                     with marked_timer("reward", timing_raw, color="yellow"):
-                        # compute reward model score
-                        if self.use_rm:
-                            batch_reward = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(batch_reward)
+                        teacher_step_reward_cfg = self.config.algorithm.teacher_step_reward
+                        use_teacher_only_reward = teacher_step_reward_cfg.enable and (
+                            float(teacher_step_reward_cfg.mix_rm_coef) == 0.0
+                        )
 
-                        if self.config.reward_model.launch_reward_fn_async:
-                            future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
+                        reward_extra_infos_dict: dict[str, list] = {}
+                        reward_tensor = torch.zeros_like(batch.batch["responses"], dtype=torch.float32)
+
+                        if use_teacher_only_reward:
+                            # In pure teacher-step mode, skip RM/reward_fn scoring to avoid
+                            # accidental dependency on final-result reward and save compute.
+                            pass
                         else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+                        # compute reward model score
+                            if self.use_rm:
+                                batch_reward = self.rm_wg.compute_rm_score(batch)
+                                batch = batch.union(batch_reward)
+
+                            if self.config.reward_model.launch_reward_fn_async:
+                                future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
+                            else:
+                                reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
@@ -1290,13 +1318,12 @@ class RayPPOTrainer:
 
                     with marked_timer("adv", timing_raw, color="brown"):
                         # we combine with rule-based rm
-                        reward_extra_infos_dict: dict[str, list]
-                        if self.config.reward_model.launch_reward_fn_async:
-                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
-                        elif self.use_rm:
-                            reward_tensor, reward_extra_infos_dict = extract_reward(batch)
+                        if not use_teacher_only_reward:
+                            if self.config.reward_model.launch_reward_fn_async:
+                                reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
+                            elif self.use_rm:
+                                reward_tensor, reward_extra_infos_dict = extract_reward(batch)
 
-                        teacher_step_reward_cfg = self.config.algorithm.teacher_step_reward
                         if teacher_step_reward_cfg.enable:
                             teacher_reward_tensor, teacher_reward_metrics = self._compute_teacher_step_reward(batch)
                             metrics.update(teacher_reward_metrics)

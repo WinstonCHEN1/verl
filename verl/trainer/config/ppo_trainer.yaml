@@ -199,7 +199,7 @@ algorithm:
 
     # Key under non-tensor reward_model dict to read teacher sequence
     # Falls back to "ground_truth" when missing
-    teacher_sequence_key: ground_truth
+    teacher_sequence_key: teacher_sequence
 
     # Coefficients in: freq_teacher(y_t) - pi(y_t) + ||pi_t||_2^2
     freq_coef: 1.0

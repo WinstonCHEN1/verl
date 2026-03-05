@@ -37,6 +37,7 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
     if pred is None:
         return {
             "score": 0.0,
+            "acc": 0.0,
             "pred": None,
             "ground_truth": gt,
             "correct": False,
@@ -45,6 +46,7 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
     correct = pred == gt
     return {
         "score": 1.0 if correct else 0.0,
+        "acc": 1.0 if correct else 0.0,
         "pred": pred,
         "ground_truth": gt,
         "correct": correct,
