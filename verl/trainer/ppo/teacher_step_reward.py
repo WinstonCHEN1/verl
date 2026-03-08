@@ -80,6 +80,7 @@ def compute_teacher_step_proxy_reward(
     responses: torch.Tensor,
     response_mask: torch.Tensor,
     old_log_probs: torch.Tensor,
+    teacher_avg_prob_exact: torch.Tensor | None,
     sum_pi_squared: torch.Tensor | None,
     reward_model_items: Any,
     tokenizer: Any,
@@ -100,7 +101,14 @@ def compute_teacher_step_proxy_reward(
     teacher_avg_prob_proxy = torch.zeros_like(teacher_freq)
     if getattr(cfg, "teacher_avg_prob_coef", 0.0) != 0.0:
         mode = getattr(cfg, "teacher_avg_prob_mode", "seq_freq_mean")
-        if mode == "seq_freq_mean":
+        if mode == "exact":
+            if teacher_avg_prob_exact is None:
+                raise ValueError(
+                    "teacher_step_reward teacher_avg_prob_mode=exact requires teacher_avg_prob tensor from actor "
+                    "compute_log_prob path."
+                )
+            teacher_avg_prob_proxy = teacher_avg_prob_exact.to(dtype=torch.float32)
+        elif mode == "seq_freq_mean":
             valid_cnt = response_mask.sum(dim=-1, keepdim=True).clamp_min(1.0)
             seq_mean = (teacher_freq * response_mask).sum(dim=-1, keepdim=True) / valid_cnt
             teacher_avg_prob_proxy = seq_mean.expand_as(teacher_freq)

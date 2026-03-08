@@ -79,11 +79,16 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.temperature=${val_temperature} \
     actor_rollout_ref.rollout.val_kwargs.top_p=${val_top_p} \
     actor_rollout_ref.rollout.val_kwargs.do_sample=False \
+    actor_rollout_ref.actor.use_remove_padding=False \
+    actor_rollout_ref.actor.use_fused_kernels=False \
+    actor_rollout_ref.actor.calculate_sum_pi_squared=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     algorithm.teacher_step_reward.enable=True \
     algorithm.teacher_step_reward.teacher_sequence_key="${TEACHER_SEQUENCE_KEY}" \
+    algorithm.teacher_step_reward.teacher_avg_prob_mode=exact \
+    algorithm.teacher_step_reward.teacher_avg_prob_coef=1.0 \
     algorithm.teacher_step_reward.mix_rm_coef=0.0 \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \

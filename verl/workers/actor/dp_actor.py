@@ -92,6 +92,7 @@ class DataParallelPPOActor(BasePPOActor):
         calculate_sum_pi_squared = self.config.get("calculate_sum_pi_squared", False)
         sum_pi_squared_checkpointing = self.config.get("sum_pi_squared_checkpointing", False)
         response_length = micro_batch["responses"].size(-1)
+        teacher_token_weight_pairs = micro_batch.get("teacher_token_weight_pairs", None)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
             if "image_bound" in micro_batch["multi_modal_inputs"][0]:  # minicpm-o logic
@@ -182,6 +183,11 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     log_probs = output.log_probs.squeeze(0)  # (total_nnz,)
                     entropy_rmpad = output.entropy.squeeze(0)  # (total_nnz,)
+                    if teacher_token_weight_pairs is not None:
+                        raise ValueError(
+                            "Exact teacher_avg_prob requires non-fused ordinary path. "
+                            "Please disable fused kernels for actor log-prob computation."
+                        )
 
                 else:
                     logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
@@ -261,6 +267,11 @@ class DataParallelPPOActor(BasePPOActor):
                 if calculate_sum_pi_squared:
                     sum_pi_squared = full_sum_pi_squared.squeeze(-1)[:, -response_length - 1 : -1]
                 log_probs = full_log_probs.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
+                if teacher_token_weight_pairs is not None:
+                    raise ValueError(
+                        "Exact teacher_avg_prob requires non-remove-padding ordinary path. "
+                        "Please set actor_rollout_ref.actor.use_remove_padding=False."
+                    )
 
             else:  # not using rmpad and no ulysses sp
                 extra_args = {}
@@ -280,6 +291,11 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     log_probs = output.log_probs[:, -response_length - 1 : -1]
                     entropy = output.entropy[:, -response_length - 1 : -1]  # (bsz, response_length)
+                    if teacher_token_weight_pairs is not None:
+                        raise ValueError(
+                            "Exact teacher_avg_prob requires non-fused ordinary path. "
+                            "Please disable fused kernels for actor log-prob computation."
+                        )
 
                 else:
                     logits = output.logits
@@ -299,12 +315,29 @@ class DataParallelPPOActor(BasePPOActor):
                             sum_pi_squared = torch.utils.checkpoint.checkpoint(
                                 self.calculate_sum_pi_squared_from_logits, logits
                             )
+                    if teacher_token_weight_pairs is not None:
+                        lse = torch.logsumexp(logits, dim=-1, keepdim=True)  # (bsz, response_length, 1)
+                        teacher_avg_prob = torch.zeros(
+                            (logits.size(0), logits.size(1)),
+                            dtype=logits.dtype,
+                            device=logits.device,
+                        )
+                        for b, (token_ids, token_weights) in enumerate(teacher_token_weight_pairs):
+                            if len(token_ids) == 0:
+                                continue
+                            ids = torch.as_tensor(token_ids, dtype=torch.long, device=logits.device)
+                            weights = torch.as_tensor(token_weights, dtype=logits.dtype, device=logits.device)
+                            selected_logits = logits[b, :, ids]  # (response_length, num_teacher_tokens)
+                            selected_probs = torch.exp(selected_logits - lse[b])
+                            teacher_avg_prob[b] = selected_probs.matmul(weights)
 
             outputs = {"log_probs": log_probs}
             if calculate_entropy:
                 outputs["entropys"] = entropy
             if calculate_sum_pi_squared:
                 outputs["sum_pi_squared"] = sum_pi_squared
+            if teacher_token_weight_pairs is not None:
+                outputs["teacher_avg_prob"] = teacher_avg_prob
             return outputs
 
     def _optimizer_step(self):
@@ -352,8 +385,11 @@ class DataParallelPPOActor(BasePPOActor):
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
+        has_teacher_token_weight_pairs = "teacher_token_weight_pairs" in data.non_tensor_batch.keys()
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
         non_tensor_select_keys = ["multi_modal_inputs"] if has_multi_modal_inputs else []
+        if has_teacher_token_weight_pairs:
+            non_tensor_select_keys.append("teacher_token_weight_pairs")
 
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
 
@@ -366,6 +402,7 @@ class DataParallelPPOActor(BasePPOActor):
         log_probs_lst = []
         entropy_lst = []
         sum_pi_squared_lst = []
+        teacher_avg_prob_lst = []
         for micro_batch in micro_batches:
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
             with torch.no_grad():
@@ -377,12 +414,16 @@ class DataParallelPPOActor(BasePPOActor):
                 entropy_lst.append(outputs["entropys"])
             if calculate_sum_pi_squared:
                 sum_pi_squared_lst.append(outputs["sum_pi_squared"])
+            if "teacher_avg_prob" in outputs:
+                teacher_avg_prob_lst.append(outputs["teacher_avg_prob"])
 
         log_probs = torch.concat(log_probs_lst, dim=0)
         if calculate_entropy:
             entropys = torch.concat(entropy_lst, dim=0)
         if calculate_sum_pi_squared:
             sum_pi_squared = torch.concat(sum_pi_squared_lst, dim=0)
+        if len(teacher_avg_prob_lst) > 0:
+            teacher_avg_prob = torch.concat(teacher_avg_prob_lst, dim=0)
 
         if use_dynamic_bsz:
             log_probs = restore_dynamic_batch(log_probs, batch_idx_list)
@@ -390,12 +431,16 @@ class DataParallelPPOActor(BasePPOActor):
                 entropys = restore_dynamic_batch(entropys, batch_idx_list)
             if calculate_sum_pi_squared:
                 sum_pi_squared = restore_dynamic_batch(sum_pi_squared, batch_idx_list)
+            if len(teacher_avg_prob_lst) > 0:
+                teacher_avg_prob = restore_dynamic_batch(teacher_avg_prob, batch_idx_list)
 
         outputs = {"log_probs": log_probs}
         if calculate_entropy:
             outputs["entropys"] = entropys
         if calculate_sum_pi_squared:
             outputs["sum_pi_squared"] = sum_pi_squared
+        if len(teacher_avg_prob_lst) > 0:
+            outputs["teacher_avg_prob"] = teacher_avg_prob
         return outputs
 
     @GPUMemoryLogger(role="dp actor", logger=logger)

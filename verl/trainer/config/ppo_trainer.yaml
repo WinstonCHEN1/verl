@@ -211,7 +211,7 @@ algorithm:
     # Coefficient for -AvgProb(teacher) proxy term
     teacher_avg_prob_coef: 1.0
 
-    # AvgProb proxy mode: seq_freq_mean | none
+    # AvgProb proxy mode: exact | seq_freq_mean | none
     teacher_avg_prob_mode: seq_freq_mean
 
     # Mix with existing rm reward:
