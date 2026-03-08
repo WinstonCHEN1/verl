@@ -434,7 +434,7 @@ def compute_rloo_outcome_advantage(
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Compute advantage for RLOO based on https://arxiv.org/abs/2402.14740
+    Compute token-level RLOO advantage based on https://arxiv.org/abs/2402.14740.
 
     Args:
         token_level_rewards: `(torch.Tensor)`
@@ -449,31 +449,38 @@ def compute_rloo_outcome_advantage(
         Returns: `(torch.Tensor)`
             shape: (bs, response_length)
     """
-    scores = token_level_rewards.sum(dim=-1)
-
-    id2score = defaultdict(list)
-    id2mean = {}
-
+    advantages = torch.zeros_like(token_level_rewards)
     with torch.no_grad():
-        bsz = scores.shape[0]
-        for i in range(bsz):
-            id2score[index[i]].append(scores[i])
-        for idx in id2score:
-            if len(id2score[idx]) == 1:
-                id2mean[idx] = torch.tensor(0.0)
-            elif len(id2score[idx]) > 1:
-                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
-            else:
-                raise ValueError(f"no score in prompt index: {idx}")
-        for i in range(bsz):
-            response_num = len(id2score[index[i]])
-            if response_num > 1:
-                scores[i] = scores[i] * response_num / (response_num - 1) - id2mean[index[i]] * response_num / (
-                    response_num - 1
-                )
-        scores = scores.unsqueeze(-1) * response_mask
+        id2indices = defaultdict(list)
+        bsz = token_level_rewards.shape[0]
+        response_mask_f = response_mask.to(dtype=token_level_rewards.dtype)
 
-    return scores, scores
+        for i in range(bsz):
+            id2indices[index[i]].append(i)
+
+        for idx, idx_list in id2indices.items():
+            response_num = len(idx_list)
+            if response_num <= 1:
+                continue
+
+            group_rewards = token_level_rewards[idx_list]
+            group_mask = response_mask_f[idx_list]
+            valid_rewards = group_rewards * group_mask
+
+            # Strictly mask-aware leave-one-out baseline on each token position.
+            other_reward_sum = valid_rewards.sum(dim=0, keepdim=True) - valid_rewards
+            other_valid_count = group_mask.sum(dim=0, keepdim=True) - group_mask
+            loo_baseline = torch.where(
+                other_valid_count > 0,
+                other_reward_sum / other_valid_count.clamp_min(1.0),
+                torch.zeros_like(other_reward_sum),
+            )
+            group_adv = (valid_rewards - loo_baseline) * group_mask
+            group_adv = torch.where(other_valid_count > 0, group_adv, torch.zeros_like(group_adv))
+            advantages[idx_list] = group_adv
+
+        advantages = advantages * response_mask_f
+    return advantages, advantages
 
 
 @register_adv_est(AdvantageEstimator.OPO)  # or simply: @register_adv_est("opo")

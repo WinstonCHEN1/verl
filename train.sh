@@ -11,10 +11,10 @@ val_top_p=0.9
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/train.parquet}
+TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/sglang/outputs/mmlu_validation_qwen3_235b/mmlu_teacher_sequence.parquet}
 VAL_FILE=${VAL_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/validation.parquet}
-CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_grpo_qwen3_4b_v2}
-MODEL_PATH=${MODEL_PATH:-/mnt/ali-sh-1/usr/lihaitao/model/Qwen3/Qwen3-4B-Instruct-2507}
+CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_grpo_qwen3_4b_thinking}
+MODEL_PATH=${MODEL_PATH:-/mnt/ali-sh-1/usr/lihaitao/model/Qwen3/Qwen3-4B-Thinking-2507}
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-${REPO_ROOT}/examples/data_preprocess/mmlu_reward.py}
 TEACHER_SEQUENCE_KEY=${TEACHER_SEQUENCE_KEY:-teacher_sequence}
 
@@ -43,7 +43,7 @@ echo "最终使用 NNODES=$NNODES"
 echo "=========================="
 
 python3 -m verl.trainer.main_ppo \
-    algorithm.adv_estimator=grpo \
+    algorithm.adv_estimator=rloo \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${VAL_FILE}" \
     trainer.default_local_dir="${CKPT_DIR}" \
@@ -87,8 +87,8 @@ python3 -m verl.trainer.main_ppo \
     algorithm.teacher_step_reward.mix_rm_coef=0.0 \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
-    trainer.project_name='verl_grpo' \
-    trainer.experiment_name='grpo_mmlu_qwen3_4b_instruct' \
+    trainer.project_name='verl_rloo' \
+    trainer.experiment_name='rloo_mmlu_qwen3_4b_thinking' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=${NNODES} \
     trainer.save_freq=20 \

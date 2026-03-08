@@ -15,11 +15,17 @@
 import random
 import unittest
 
+import numpy as np
 import pytest
 import torch
 
 import verl.trainer.ppo.core_algos
-from verl.trainer.ppo.core_algos import compute_gae_advantage_return, get_adv_estimator_fn, register_adv_est
+from verl.trainer.ppo.core_algos import (
+    compute_gae_advantage_return,
+    compute_rloo_outcome_advantage,
+    get_adv_estimator_fn,
+    register_adv_est,
+)
 
 
 def mock_test_fn():
@@ -186,6 +192,67 @@ def test_multi_turn_compute_gae_advantage_return():
     assert torch.equal(adv1, adv2), f"{adv1=}, {adv2=}"
     assert torch.equal(ret1, ret2), f"{ret1=}, {ret2=}"
     print(f" [CORRECT] \n\n{adv1=}, \n\n{ret1=}")
+
+
+def test_compute_rloo_token_level_advantage_no_sequence_broadcast():
+    token_level_rewards = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
+    response_mask = torch.tensor([[1.0, 1.0], [1.0, 1.0]], dtype=torch.float32)
+    index = np.array(["g1", "g1"], dtype=object)
+
+    advantages, returns = compute_rloo_outcome_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+    )
+
+    expected = torch.tensor([[-2.0, -2.0], [2.0, 2.0]], dtype=torch.float32)
+    assert torch.allclose(advantages, expected)
+    assert torch.allclose(returns, expected)
+
+
+def test_compute_rloo_token_level_advantage_respects_mask_and_single_group():
+    token_level_rewards = torch.tensor([[1.0, 9.0], [3.0, 7.0], [5.0, 6.0]], dtype=torch.float32)
+    response_mask = torch.tensor([[1.0, 0.0], [1.0, 0.0], [1.0, 1.0]], dtype=torch.float32)
+    index = np.array(["g1", "g1", "solo"], dtype=object)
+
+    advantages, returns = compute_rloo_outcome_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+    )
+
+    expected = torch.tensor([[-2.0, 0.0], [2.0, 0.0], [0.0, 0.0]], dtype=torch.float32)
+    assert torch.allclose(advantages, expected)
+    assert torch.allclose(returns, expected)
+
+
+def test_compute_rloo_token_level_advantage_strict_mask_for_loo_baseline():
+    # g1 has 3 samples. At token t=1 only sample-0 is valid.
+    token_level_rewards = torch.tensor(
+        [[10.0, 2.0], [4.0, 100.0], [1.0, 200.0]],
+        dtype=torch.float32,
+    )
+    response_mask = torch.tensor(
+        [[1.0, 1.0], [1.0, 0.0], [1.0, 0.0]],
+        dtype=torch.float32,
+    )
+    index = np.array(["g1", "g1", "g1"], dtype=object)
+
+    advantages, returns = compute_rloo_outcome_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+    )
+
+    # t=0:
+    # sample0 baseline=(4+1)/2=2.5 => 7.5
+    # sample1 baseline=(10+1)/2=5.5 => -1.5
+    # sample2 baseline=(10+4)/2=7.0 => -6.0
+    # t=1:
+    # only sample0 valid, no valid leave-one-out peers => 0
+    expected = torch.tensor([[7.5, 0.0], [-1.5, 0.0], [-6.0, 0.0]], dtype=torch.float32)
+    assert torch.allclose(advantages, expected)
+    assert torch.allclose(returns, expected)
 
 
 if __name__ == "__main__":
