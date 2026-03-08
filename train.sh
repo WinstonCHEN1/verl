@@ -11,9 +11,10 @@ val_top_p=0.9
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/sglang/outputs/mmlu_validation_qwen3_235b/mmlu_teacher_sequence.parquet}
+
+TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/235_train.parquet}
 VAL_FILE=${VAL_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/validation.parquet}
-CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_grpo_qwen3_4b_thinking}
+CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_rloo_qwen3_4b_thinking}
 MODEL_PATH=${MODEL_PATH:-/mnt/ali-sh-1/usr/lihaitao/model/Qwen3/Qwen3-4B-Thinking-2507}
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-${REPO_ROOT}/examples/data_preprocess/mmlu_reward.py}
 TEACHER_SEQUENCE_KEY=${TEACHER_SEQUENCE_KEY:-teacher_sequence}
@@ -47,7 +48,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${VAL_FILE}" \
     trainer.default_local_dir="${CKPT_DIR}" \
-    data.train_batch_size=256 \
+    data.train_batch_size=1024 \
     data.max_prompt_length=1000 \
     data.max_response_length=15000 \
     data.filter_overlong_prompts=True \
