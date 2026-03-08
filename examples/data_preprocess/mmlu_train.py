@@ -32,9 +32,9 @@ def build_prompt(row: pd.Series) -> list[dict[str, str]]:
     if subject:
         question = f"Subject: {subject}\n\n{question}"
     prompt = (
-        "Answer the following multiple-choice question.\\n"
-        "Choose exactly one option from A, B, C, D.\\n"
-        "At the end, output in this exact format: Final answer: <A/B/C/D>.\\n\\n"
+        "Answer the following multiple-choice question.\n"
+        "Choose exactly one option from A, B, C, D.\n"
+        "At the end output: Final answer: <A/B/C/D>.\n\n"
         f"Question: {question}\n"
         f"Choices:\n"
         f"A. {str(choices[0]).strip()}\n"
@@ -52,7 +52,7 @@ def build_prompt(row: pd.Series) -> list[dict[str, str]]:
 def convert_split(df: pd.DataFrame, split: str) -> pd.DataFrame:
     records = []
     for idx, row in df.iterrows():
-        raw_answer = row["answer"]
+        raw_answer = row["answer"] if "answer" in row and pd.notna(row["answer"]) else row["gold"]
         if isinstance(raw_answer, str):
             answer = raw_answer.strip().upper()
         elif isinstance(raw_answer, (int, float)):
@@ -74,6 +74,7 @@ def convert_split(df: pd.DataFrame, split: str) -> pd.DataFrame:
                 "reward_model": {
                     "style": "rule",
                     "ground_truth": answer,
+                    "teacher_sequence": row.get("teacher_sequence", None),
                     "choices": {
                         "A": str(choices[0]).strip(),
                         "B": str(choices[1]).strip(),
@@ -94,17 +95,17 @@ def convert_split(df: pd.DataFrame, split: str) -> pd.DataFrame:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--val_path", default="/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_parquet/mmlu_validation.parquet")
+    parser.add_argument("--val_path", default="/mnt/ali-sh-1/usr/lihaitao/chenguo/sglang/outputs/mmlu_validation_qwen3_235b/mmlu_teacher_sequence.parquet")
     parser.add_argument("--local_save_dir", default="/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo")
     parser.add_argument("--hdfs_dir", default=None)
     args = parser.parse_args()
 
-    val_df = convert_split(read_table(args.val_path), split="validation")
+    val_df = convert_split(read_table(args.val_path), split="train")
 
     local_save_dir = os.path.expanduser(args.local_save_dir)
     os.makedirs(local_save_dir, exist_ok=True)
 
-    val_path = os.path.join(local_save_dir, "validation.parquet")
+    val_path = os.path.join(local_save_dir, "235_train.parquet")
     val_df.to_parquet(val_path, index=False)
 
     print(f"Saved validation parquet to {val_path} with {len(val_df)} rows")
@@ -114,7 +115,6 @@ def main():
 
         makedirs(args.hdfs_dir)
         copy(src=local_save_dir, dst=args.hdfs_dir)
-
 
 if __name__ == "__main__":
     main()

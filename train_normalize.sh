@@ -13,7 +13,7 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/235_train.parquet}
 VAL_FILE=${VAL_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/validation.parquet}
-CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_grpo_qwen3_4b_thinking}
+CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_grpo_qwen3_4b_thinking_normalize}
 MODEL_PATH=${MODEL_PATH:-/mnt/ali-sh-1/usr/lihaitao/model/Qwen3/Qwen3-4B-Thinking-2507}
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-${REPO_ROOT}/examples/data_preprocess/mmlu_reward.py}
 TEACHER_SEQUENCE_KEY=${TEACHER_SEQUENCE_KEY:-teacher_sequence}
@@ -57,7 +57,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.lr=1e-6 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=128 \ 
+    actor_rollout_ref.actor.ppo_mini_batch_size=128 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=False \
     actor_rollout_ref.actor.kl_loss_coef=0 \
@@ -85,11 +85,11 @@ python3 -m verl.trainer.main_ppo \
     algorithm.teacher_step_reward.enable=True \
     algorithm.teacher_step_reward.teacher_sequence_key="${TEACHER_SEQUENCE_KEY}" \
     algorithm.teacher_step_reward.mix_rm_coef=0.0 \
-    algorithm.teacher_step_reward.normalize_per_sequence=False \
+    algorithm.teacher_step_reward.normalize_per_sequence=True \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_grpo' \
-    trainer.experiment_name='grpo_mmlu_qwen3_4b_thinking' \
+    trainer.experiment_name='grpo_mmlu_qwen3_4b_thinking_normalize' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=${NNODES} \
     trainer.save_freq=20 \
