@@ -882,13 +882,22 @@ class RayPPOTrainer:
         self.resource_pool_manager.create_resource_pool()
 
         self.resource_pool_to_cls = {pool: {} for pool in self.resource_pool_manager.resource_pool_dict.values()}
+        # FSDP actor/ref workers are initialized from actor_rollout_ref subtree config.
+        # Inject teacher-step config so worker-side exact avg-prob path can read
+        # algorithm.teacher_step_reward without requiring the full top-level trainer config.
+        actor_rollout_worker_config = deepcopy(self.config.actor_rollout_ref)
+        with open_dict(actor_rollout_worker_config):
+            actor_rollout_worker_config.algorithm = OmegaConf.create({})
+            actor_rollout_worker_config.algorithm.teacher_step_reward = deepcopy(
+                self.config.algorithm.teacher_step_reward
+            )
 
         # create actor and rollout
         if self.hybrid_engine:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.ActorRollout)
             actor_rollout_cls = RayClassWithInitArgs(
                 cls=self.role_worker_mapping[Role.ActorRollout],
-                config=self.config.actor_rollout_ref,
+                config=actor_rollout_worker_config,
                 role="actor_rollout",
                 profile_option=self.config.trainer.npu_profile.options,
             )
@@ -907,7 +916,7 @@ class RayPPOTrainer:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RefPolicy)
             ref_policy_cls = RayClassWithInitArgs(
                 self.role_worker_mapping[Role.RefPolicy],
-                config=self.config.actor_rollout_ref,
+                config=actor_rollout_worker_config,
                 role="ref",
                 profile_option=self.config.trainer.npu_profile.options,
             )

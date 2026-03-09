@@ -11,9 +11,9 @@ val_top_p=0.9
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/sglang/outputs/mmlu_validation_qwen3_235b/mmlu_teacher_sequence.parquet}
+TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/235_train.parquet}
 VAL_FILE=${VAL_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/validation.parquet}
-CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_grpo_qwen3_4b_thinking}
+CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_rloo_qwen3_4b_thinking_exact}
 MODEL_PATH=${MODEL_PATH:-/mnt/ali-sh-1/usr/lihaitao/model/Qwen3/Qwen3-4B-Thinking-2507}
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-${REPO_ROOT}/examples/data_preprocess/mmlu_reward.py}
 TEACHER_SEQUENCE_KEY=${TEACHER_SEQUENCE_KEY:-teacher_sequence}
@@ -56,6 +56,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.path="${MODEL_PATH}" \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.model.use_remove_padding=False \
+    actor_rollout_ref.model.use_fused_kernels=False \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_mini_batch_size=128 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
@@ -79,10 +81,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.temperature=${val_temperature} \
     actor_rollout_ref.rollout.val_kwargs.top_p=${val_top_p} \
     actor_rollout_ref.rollout.val_kwargs.do_sample=False \
-    actor_rollout_ref.actor.use_remove_padding=False \
-    actor_rollout_ref.actor.use_fused_kernels=False \
     actor_rollout_ref.actor.calculate_sum_pi_squared=True \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     algorithm.teacher_step_reward.enable=True \
@@ -93,13 +93,13 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_rloo' \
-    trainer.experiment_name='rloo_mmlu_qwen3_4b_thinking' \
+    trainer.experiment_name='rloo_mmlu_qwen3_4b_thinking_exact' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=${NNODES} \
     trainer.save_freq=20 \
     trainer.test_freq=5 \
     trainer.log_val_generations=1 \
-    trainer.total_epochs=15 \
+    trainer.total_epochs=100 \
     custom_reward_function.path="${CUSTOM_REWARD_PATH}" \
     custom_reward_function.name=compute_score \
     "$@"

@@ -24,6 +24,7 @@ from dataclasses import asdict
 from numbers import Integral
 from typing import Any
 
+import numpy as np
 import psutil
 import torch
 import torch.distributed
@@ -820,20 +821,28 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         is_lora = data.meta_info.pop("is_lora", False)
         adapter_ctx = self.actor.actor_module.disable_adapter() if is_lora else nullcontext()
 
-        teacher_cfg = self.config.algorithm.teacher_step_reward
-        if (
-            teacher_cfg.enable
-            and float(teacher_cfg.teacher_avg_prob_coef) != 0.0
-            and str(teacher_cfg.teacher_avg_prob_mode) == "exact"
-        ):
+        teacher_cfg = OmegaConf.select(self.config, "algorithm.teacher_step_reward")
+        teacher_enable = bool(OmegaConf.select(teacher_cfg, "enable")) if teacher_cfg is not None else False
+        teacher_avg_prob_coef = (
+            float(OmegaConf.select(teacher_cfg, "teacher_avg_prob_coef")) if teacher_cfg is not None else 0.0
+        )
+        teacher_avg_prob_mode = (
+            str(OmegaConf.select(teacher_cfg, "teacher_avg_prob_mode")) if teacher_cfg is not None else ""
+        )
+        teacher_sequence_key = (
+            OmegaConf.select(teacher_cfg, "teacher_sequence_key") if teacher_cfg is not None else None
+        )
+        teacher_sequence_key = str(teacher_sequence_key) if teacher_sequence_key is not None else "ground_truth"
+
+        if teacher_enable and teacher_avg_prob_coef != 0.0 and teacher_avg_prob_mode == "exact":
             reward_model_items = data.non_tensor_batch.get("reward_model", None)
             token_weight_pairs = _build_teacher_token_weight_pairs(
                 reward_model_items=reward_model_items,
                 tokenizer=self.tokenizer,
-                teacher_sequence_key=teacher_cfg.teacher_sequence_key,
+                teacher_sequence_key=teacher_sequence_key,
             )
             if token_weight_pairs:
-                data.non_tensor_batch["teacher_token_weight_pairs"] = token_weight_pairs
+                data.non_tensor_batch["teacher_token_weight_pairs"] = np.asarray(token_weight_pairs, dtype=object)
 
         data = data.to(get_device_id())
         # we should always recompute old_log_probs when it is HybridEngine
