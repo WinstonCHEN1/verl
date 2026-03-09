@@ -14,7 +14,7 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/235_train.parquet}
 VAL_FILE=${VAL_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/validation.parquet}
-CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_rloo_qwen3_4b_thinking}
+CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_rloo_qwen3_4b_thinking_morestep}
 MODEL_PATH=${MODEL_PATH:-/mnt/ali-sh-1/usr/lihaitao/model/Qwen3/Qwen3-4B-Thinking-2507}
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-${REPO_ROOT}/examples/data_preprocess/mmlu_reward.py}
 TEACHER_SEQUENCE_KEY=${TEACHER_SEQUENCE_KEY:-teacher_sequence}
@@ -89,13 +89,13 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_rloo' \
-    trainer.experiment_name='rloo_mmlu_qwen3_4b_thinking' \
+    trainer.experiment_name='rloo_mmlu_qwen3_4b_thinking_morestep' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=${NNODES} \
     trainer.save_freq=20 \
     trainer.test_freq=5 \
     trainer.log_val_generations=1 \
-    trainer.total_epochs=15 \
+    trainer.total_epochs=100 \
     custom_reward_function.path="${CUSTOM_REWARD_PATH}" \
     custom_reward_function.name=compute_score \
     "$@"

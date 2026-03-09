@@ -810,6 +810,22 @@ class RayPPOTrainer:
             assert len(lst) == 0 or len(lst) == len(sample_scores), f"{key_info}: {len(lst)=}, {len(sample_scores)=}"
 
         data_sources = np.concatenate(data_source_lst, axis=0)
+        metric_dict = {}
+        if "acc" in reward_extra_infos_dict and len(reward_extra_infos_dict["acc"]) > 0:
+            acc_arr = np.asarray(reward_extra_infos_dict["acc"], dtype=np.float32)
+            total = int(acc_arr.size)
+            correct = float(acc_arr.sum())
+            metric_dict["val-strict/num_samples"] = total
+            metric_dict["val-strict/num_correct"] = correct
+            metric_dict["val-strict/acc"] = float(acc_arr.mean())
+            for data_source in np.unique(data_sources):
+                mask = data_sources == data_source
+                if np.any(mask):
+                    ds_total = int(mask.sum())
+                    ds_correct = float(acc_arr[mask].sum())
+                    metric_dict[f"val-strict/{data_source}/num_samples"] = ds_total
+                    metric_dict[f"val-strict/{data_source}/num_correct"] = ds_correct
+                    metric_dict[f"val-strict/{data_source}/acc"] = float(acc_arr[mask].mean())
 
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_inputs, reward_extra_infos_dict)
         metric_dict = {}
