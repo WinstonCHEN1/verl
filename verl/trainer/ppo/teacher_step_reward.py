@@ -70,8 +70,13 @@ def compute_teacher_frequency_tensor(
 
         counts = Counter(teacher_token_ids)
         denom = float(len(teacher_token_ids))
+        rewarded_student_counts: Counter[int] = Counter()
         for t, token_id in enumerate(responses[i].tolist()):
-            freq[i, t] = counts.get(int(token_id), 0) / denom
+            token_id = int(token_id)
+            if rewarded_student_counts[token_id] >= counts.get(token_id, 0):
+                continue
+            rewarded_student_counts[token_id] += 1
+            freq[i, t] = 1.0 / denom
 
     return freq
 
@@ -84,6 +89,7 @@ def compute_teacher_step_proxy_reward(
     reward_model_items: Any,
     tokenizer: Any,
     cfg: Any,
+    teacher_avg_prob_exact: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     response_mask = response_mask.to(dtype=torch.float32)
     pi_t = torch.exp(old_log_probs).to(dtype=torch.float32)
@@ -100,7 +106,14 @@ def compute_teacher_step_proxy_reward(
     teacher_avg_prob_proxy = torch.zeros_like(teacher_freq)
     if getattr(cfg, "teacher_avg_prob_coef", 0.0) != 0.0:
         mode = getattr(cfg, "teacher_avg_prob_mode", "seq_freq_mean")
-        if mode == "seq_freq_mean":
+        if mode == "exact":
+            if teacher_avg_prob_exact is None:
+                raise ValueError(
+                    "teacher_step_reward teacher_avg_prob_mode=exact requires teacher_avg_prob tensor from actor "
+                    "compute_log_prob path."
+                )
+            teacher_avg_prob_proxy = teacher_avg_prob_exact.to(dtype=torch.float32)
+        elif mode == "seq_freq_mean":
             valid_cnt = response_mask.sum(dim=-1, keepdim=True).clamp_min(1.0)
             seq_mean = (teacher_freq * response_mask).sum(dim=-1, keepdim=True) / valid_cnt
             teacher_avg_prob_proxy = seq_mean.expand_as(teacher_freq)

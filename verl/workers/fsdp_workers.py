@@ -19,9 +19,12 @@ import json
 import logging
 import os
 import warnings
+from collections import Counter
 from dataclasses import asdict
+from numbers import Integral
 from typing import Any
 
+import numpy as np
 import psutil
 import torch
 import torch.distributed
@@ -100,6 +103,54 @@ def get_sharding_strategy(device_mesh):
     else:
         raise NotImplementedError(f"Get device mesh ndim={device_mesh.ndim}, but only support 1 or 2")
     return sharding_strategy
+
+
+def _to_teacher_token_ids(teacher_sequence: Any, tokenizer: Any) -> list[int]:
+    if teacher_sequence is None:
+        return []
+    if hasattr(teacher_sequence, "tolist"):
+        teacher_sequence = teacher_sequence.tolist()
+    if isinstance(teacher_sequence, (list, tuple)):
+        if len(teacher_sequence) == 0:
+            return []
+        if all(isinstance(x, Integral) for x in teacher_sequence):
+            return [int(x) for x in teacher_sequence]
+        teacher_sequence = " ".join(str(x) for x in teacher_sequence)
+    if isinstance(teacher_sequence, str):
+        token_ids = tokenizer.encode(teacher_sequence, add_special_tokens=False)
+        return [int(x) for x in token_ids]
+    return []
+
+
+def _build_teacher_token_weight_pairs(
+    reward_model_items: Any,
+    tokenizer: Any,
+    teacher_sequence_key: str,
+) -> list[tuple[list[int], list[float]]]:
+    pairs: list[tuple[list[int], list[float]]] = []
+    if reward_model_items is None:
+        return pairs
+
+    for item in reward_model_items:
+        teacher_sequence = None
+        if isinstance(item, dict):
+            teacher_sequence = item.get(teacher_sequence_key)
+            if teacher_sequence is None and teacher_sequence_key != "ground_truth":
+                teacher_sequence = item.get("ground_truth")
+        else:
+            teacher_sequence = item
+
+        teacher_token_ids = _to_teacher_token_ids(teacher_sequence, tokenizer)
+        if len(teacher_token_ids) == 0:
+            pairs.append(([], []))
+            continue
+
+        counts = Counter(teacher_token_ids)
+        denom = float(len(teacher_token_ids))
+        ids = [int(token_id) for token_id in counts.keys()]
+        weights = [float(counts[token_id]) / denom for token_id in ids]
+        pairs.append((ids, weights))
+    return pairs
 
 
 class ActorRolloutRefWorker(Worker, DistProfilerExtension):
@@ -769,6 +820,29 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         is_lora = data.meta_info.pop("is_lora", False)
         adapter_ctx = self.actor.actor_module.disable_adapter() if is_lora else nullcontext()
+
+        teacher_cfg = OmegaConf.select(self.config, "algorithm.teacher_step_reward")
+        teacher_enable = bool(OmegaConf.select(teacher_cfg, "enable")) if teacher_cfg is not None else False
+        teacher_avg_prob_coef = (
+            float(OmegaConf.select(teacher_cfg, "teacher_avg_prob_coef")) if teacher_cfg is not None else 0.0
+        )
+        teacher_avg_prob_mode = (
+            str(OmegaConf.select(teacher_cfg, "teacher_avg_prob_mode")) if teacher_cfg is not None else ""
+        )
+        teacher_sequence_key = (
+            OmegaConf.select(teacher_cfg, "teacher_sequence_key") if teacher_cfg is not None else None
+        )
+        teacher_sequence_key = str(teacher_sequence_key) if teacher_sequence_key is not None else "ground_truth"
+        if teacher_enable and teacher_avg_prob_coef != 0.0 and teacher_avg_prob_mode == "exact":
+            reward_model_items = data.non_tensor_batch.get("reward_model", None)
+            token_weight_pairs = _build_teacher_token_weight_pairs(
+                reward_model_items=reward_model_items,
+                tokenizer=self.tokenizer,
+                teacher_sequence_key=teacher_sequence_key,
+            )
+            if token_weight_pairs:
+                data.non_tensor_batch["teacher_token_weight_pairs"] = np.asarray(token_weight_pairs, dtype=object)
+
         data = data.to(get_device_id())
         # we should always recompute old_log_probs when it is HybridEngine
         data.meta_info["micro_batch_size"] = self.config.rollout.log_prob_micro_batch_size_per_gpu
@@ -776,14 +850,20 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         data.meta_info["use_dynamic_bsz"] = self.config.rollout.log_prob_use_dynamic_bsz
         data.meta_info["temperature"] = self.config.rollout.temperature
         data.meta_info.setdefault("pad_token_id", self.tokenizer.pad_token_id)
+        entropy_coeff = float(self.config.actor.get("entropy_coeff", 0.0))
+        calculate_entropy = entropy_coeff != 0.0
         # perform recompute log_prob
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
             with adapter_ctx:
-                outputs = self.actor.compute_log_prob(data=data, calculate_entropy=True)
-            tensors = {"old_log_probs": outputs["log_probs"], "entropys": outputs["entropys"]}
+                outputs = self.actor.compute_log_prob(data=data, calculate_entropy=calculate_entropy)
+            tensors = {"old_log_probs": outputs["log_probs"]}
+            if "entropys" in outputs:
+                tensors["entropys"] = outputs["entropys"]
             if "sum_pi_squared" in outputs:
                 tensors["sum_pi_squared"] = outputs["sum_pi_squared"]
+            if "teacher_avg_prob" in outputs:
+                tensors["teacher_avg_prob"] = outputs["teacher_avg_prob"]
             output = DataProto.from_dict(
                 tensors=tensors,
                 meta_info={"temperature": self.config.rollout.temperature},

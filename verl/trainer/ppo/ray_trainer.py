@@ -692,6 +692,7 @@ class RayPPOTrainer:
             reward_model_items=reward_model_items,
             tokenizer=self.tokenizer,
             cfg=cfg,
+            teacher_avg_prob_exact=batch.batch.get("teacher_avg_prob", None),
         )
 
     def _validate(self):
@@ -862,13 +863,19 @@ class RayPPOTrainer:
         self.resource_pool_manager.create_resource_pool()
 
         self.resource_pool_to_cls = {pool: {} for pool in self.resource_pool_manager.resource_pool_dict.values()}
+        actor_rollout_worker_config = deepcopy(self.config.actor_rollout_ref)
+        with open_dict(actor_rollout_worker_config):
+            actor_rollout_worker_config.algorithm = OmegaConf.create({})
+            actor_rollout_worker_config.algorithm.teacher_step_reward = deepcopy(
+                self.config.algorithm.teacher_step_reward
+            )
 
         # create actor and rollout
         if self.hybrid_engine:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.ActorRollout)
             actor_rollout_cls = RayClassWithInitArgs(
                 cls=self.role_worker_mapping[Role.ActorRollout],
-                config=self.config.actor_rollout_ref,
+                config=actor_rollout_worker_config,
                 role="actor_rollout",
                 profile_option=self.config.trainer.npu_profile.options,
             )
@@ -887,7 +894,7 @@ class RayPPOTrainer:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RefPolicy)
             ref_policy_cls = RayClassWithInitArgs(
                 self.role_worker_mapping[Role.RefPolicy],
-                config=self.config.actor_rollout_ref,
+                config=actor_rollout_worker_config,
                 role="ref",
                 profile_option=self.config.trainer.npu_profile.options,
             )
@@ -1268,13 +1275,16 @@ class RayPPOTrainer:
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
-                        entropys = old_log_prob.batch["entropys"]
-                        response_masks = batch.batch["response_mask"]
-                        loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
-                        entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
-                        old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
-                        metrics.update(old_log_prob_metrics)
-                        old_log_prob.batch.pop("entropys")
+                        if "entropys" in old_log_prob.batch:
+                            entropys = old_log_prob.batch["entropys"]
+                            response_masks = batch.batch["response_mask"]
+                            loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
+                            entropy_agg = agg_loss(
+                                loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode
+                            )
+                            old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
+                            metrics.update(old_log_prob_metrics)
+                            old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
 
                         if "rollout_log_probs" in batch.batch.keys():
