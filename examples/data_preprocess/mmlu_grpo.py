@@ -1,31 +1,10 @@
-#!/usr/bin/env python3
-# Copyright 2026 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""
-Convert MMLU-style flat tables into verl RL parquet files for GRPO.
-"""
-
 import argparse
 import os
 
 import pandas as pd
+import numpy as np
 
-
-SYSTEM_PROMPT = (
-    "You are a helpful assistant. Solve the multiple-choice question and respond with only the correct option "
-    "letter: A, B, C, or D."
-)
+SYSTEM_PROMPT = "Please think deeply before your response."
 
 
 def read_table(path: str) -> pd.DataFrame:
@@ -46,21 +25,24 @@ def build_prompt(row: pd.Series) -> list[dict[str, str]]:
     question_key = "question" if "question" in row else "prompt"
     question = str(row[question_key]).strip()
     subject = str(row["subject"]).strip() if "subject" in row and pd.notna(row["subject"]) else None
-    choices = row["choices"]
+    choices = np.array(row["choices"]).astype(str).tolist()
     if not isinstance(choices, (list, tuple)) or len(choices) != 4:
         raise ValueError(f"Expected `choices` to be a length-4 list, got: {choices}")
 
     if subject:
         question = f"Subject: {subject}\n\n{question}"
-
     prompt = (
-        f"{question}\n\n"
+        "Answer the following multiple-choice question.\\n"
+        "Choose exactly one option from A, B, C, D.\\n"
+        "At the end, output in this exact format: Final answer: <A/B/C/D>.\\n\\n"
+        f"Question: {question}\n"
+        f"Choices:\n"
         f"A. {str(choices[0]).strip()}\n"
         f"B. {str(choices[1]).strip()}\n"
         f"C. {str(choices[2]).strip()}\n"
         f"D. {str(choices[3]).strip()}\n\n"
-        "Answer with the correct option letter only."
     )
+
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
@@ -80,7 +62,7 @@ def convert_split(df: pd.DataFrame, split: str) -> pd.DataFrame:
         if answer not in {"A", "B", "C", "D"}:
             raise ValueError(f"Unexpected answer at row {idx}: {answer}")
 
-        choices = row["choices"]
+        choices = np.array(row["choices"]).tolist()
         if not isinstance(choices, (list, tuple)) or len(choices) != 4:
             raise ValueError(f"Expected `choices` to be a length-4 list, got: {choices}")
 
@@ -112,24 +94,19 @@ def convert_split(df: pd.DataFrame, split: str) -> pd.DataFrame:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train_path", required=True, help="Path to raw MMLU train split.")
-    parser.add_argument("--val_path", required=True, help="Path to raw MMLU validation split.")
-    parser.add_argument("--local_save_dir", default="~/data/mmlu_grpo")
+    parser.add_argument("--val_path", default="/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_parquet/mmlu_validation.parquet")
+    parser.add_argument("--local_save_dir", default="/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo")
     parser.add_argument("--hdfs_dir", default=None)
     args = parser.parse_args()
 
-    train_df = convert_split(read_table(args.train_path), split="train")
     val_df = convert_split(read_table(args.val_path), split="validation")
 
     local_save_dir = os.path.expanduser(args.local_save_dir)
     os.makedirs(local_save_dir, exist_ok=True)
 
-    train_path = os.path.join(local_save_dir, "train.parquet")
     val_path = os.path.join(local_save_dir, "validation.parquet")
-    train_df.to_parquet(train_path, index=False)
     val_df.to_parquet(val_path, index=False)
 
-    print(f"Saved train parquet to {train_path} with {len(train_df)} rows")
     print(f"Saved validation parquet to {val_path} with {len(val_df)} rows")
 
     if args.hdfs_dir is not None:

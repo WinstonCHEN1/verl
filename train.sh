@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -x
 
-export WANDB_API_KEY="${WANDB_API_KEY:-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}"
+export WANDB_API_KEY="${WANDB_API_KEY:-wandb...}"
 
 clip_ratio_low=0.2
 clip_ratio_high=0.28
@@ -11,10 +11,10 @@ val_top_p=0.9
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/train.parquet}
+TRAIN_FILE=${TRAIN_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/235_train.parquet}
 VAL_FILE=${VAL_FILE:-/mnt/ali-sh-1/usr/lihaitao/chenguo/data/mmlu_grpo/validation.parquet}
-CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_grpo_qwen3_4b_v2}
-MODEL_PATH=${MODEL_PATH:-/mnt/ali-sh-1/usr/lihaitao/model/Qwen3/Qwen3-4B-Instruct-2507}
+CKPT_DIR=${CKPT_DIR:-/mnt/ali-sh-1/usr/lihaitao/chenguo/checkpoints/mmlu_rloo_qwen3_4b_unique}
+MODEL_PATH=${MODEL_PATH:-/mnt/ali-sh-1/usr/lihaitao/model/Qwen3/Qwen3-4B-Thinking-2507}
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-${REPO_ROOT}/examples/data_preprocess/mmlu_reward.py}
 TEACHER_SEQUENCE_KEY=${TEACHER_SEQUENCE_KEY:-teacher_sequence}
 
@@ -47,7 +47,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${VAL_FILE}" \
     trainer.default_local_dir="${CKPT_DIR}" \
-    data.train_batch_size=256 \
+    data.train_batch_size=1024 \
     data.max_prompt_length=1000 \
     data.max_response_length=15000 \
     data.filter_overlong_prompts=True \
@@ -89,13 +89,13 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_grpo' \
-    trainer.experiment_name='grpo_mmlu_qwen3_4b_instruct' \
+    trainer.experiment_name='grpo_mmlu_qwen3_4b_thinking' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=${NNODES} \
     trainer.save_freq=20 \
     trainer.test_freq=5 \
     trainer.log_val_generations=1 \
-    trainer.total_epochs=15 \
+    trainer.total_epochs=100 \
     custom_reward_function.path="${CUSTOM_REWARD_PATH}" \
     custom_reward_function.name=compute_score \
     "$@"
