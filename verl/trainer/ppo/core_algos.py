@@ -252,8 +252,7 @@ def compute_grpo_outcome_advantage(
     config: Optional[AlgoConfig] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Compute advantage for GRPO, operating only on Outcome reward
-    (with only one scalar reward for each response).
+    Compute token-level GRPO advantage from token rewards.
 
     Args:
         token_level_rewards: `(torch.Tensor)`
@@ -279,33 +278,40 @@ def compute_grpo_outcome_advantage(
         Returns: `(torch.Tensor)`
             shape is (bs, response_length)
     """
-    scores = token_level_rewards.sum(dim=-1)
-
-    id2score = defaultdict(list)
-    id2mean = {}
-    id2std = {}
+    advantages = torch.zeros_like(token_level_rewards)
+    returns = torch.zeros_like(token_level_rewards)
 
     with torch.no_grad():
-        bsz = scores.shape[0]
-        for i in range(bsz):
-            id2score[index[i]].append(scores[i])
-        for idx in id2score:
-            if len(id2score[idx]) == 1:
-                id2mean[idx] = torch.tensor(0.0)
-                id2std[idx] = torch.tensor(1.0)
-            elif len(id2score[idx]) > 1:
-                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
-                id2std[idx] = torch.std(torch.tensor([id2score[idx]]))
-            else:
-                raise ValueError(f"no score in prompt index: {idx}")
-        for i in range(bsz):
-            if norm_adv_by_std_in_grpo:
-                scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
-            else:
-                scores[i] = scores[i] - id2mean[index[i]]
-        scores = scores.unsqueeze(-1) * response_mask
+        bsz = token_level_rewards.shape[0]
+        response_mask_f = response_mask.to(dtype=token_level_rewards.dtype)
+        masked_rewards = token_level_rewards * response_mask_f
+        token_level_returns = masked_rewards.flip(dims=[-1]).cumsum(dim=-1).flip(dims=[-1])
+        returns.copy_(token_level_returns)
 
-    return scores, scores
+        id2indices = defaultdict(list)
+        for i in range(bsz):
+            id2indices[index[i]].append(i)
+
+        for idx, idx_list in id2indices.items():
+            group_returns = token_level_returns[idx_list]
+            group_mask = response_mask_f[idx_list]
+            group_total_returns = group_returns[:, 0]
+
+            baseline = group_total_returns.mean()
+            if norm_adv_by_std_in_grpo:
+                scale = group_total_returns.std(unbiased=False) + epsilon
+            else:
+                scale = torch.tensor(1.0, dtype=group_returns.dtype, device=group_returns.device)
+
+            group_adv = (group_returns - baseline) / scale
+            valid_count_per_pos = group_mask.sum(dim=0, keepdim=True)
+            group_adv = torch.where(valid_count_per_pos > 1, group_adv * group_mask, torch.zeros_like(group_adv))
+            advantages[idx_list] = group_adv
+
+        advantages = advantages * response_mask_f
+        returns = returns * response_mask_f
+
+    return advantages, returns
 
 
 @register_adv_est(AdvantageEstimator.GRPO_PASSK)  # or simply: @register_adv_est("grpo_passk")

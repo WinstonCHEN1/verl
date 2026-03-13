@@ -22,6 +22,7 @@ import torch
 import verl.trainer.ppo.core_algos
 from verl.trainer.ppo.core_algos import (
     compute_gae_advantage_return,
+    compute_grpo_outcome_advantage,
     compute_rloo_outcome_advantage,
     get_adv_estimator_fn,
     register_adv_est,
@@ -253,6 +254,83 @@ def test_compute_rloo_token_level_advantage_strict_mask_for_loo_baseline():
     expected = torch.tensor([[7.5, 0.0], [-1.5, 0.0], [-6.0, 0.0]], dtype=torch.float32)
     assert torch.allclose(advantages, expected)
     assert torch.allclose(returns, expected)
+
+
+def test_compute_grpo_token_level_advantage_uses_return_to_go():
+    token_level_rewards = torch.tensor(
+        [
+            [0.3, 0.1, 0.5, 0.2, 0.0],
+            [0.0, 0.0, 0.1, 0.0, 0.0],
+            [0.2, 0.4, 0.3, 0.1, 0.1],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    response_mask = torch.ones_like(token_level_rewards)
+    index = np.array(["g1", "g1", "g1", "g1"], dtype=object)
+
+    advantages, returns = compute_grpo_outcome_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+    )
+
+    expected_returns = torch.tensor(
+        [
+            [1.1, 0.8, 0.7, 0.2, 0.0],
+            [0.1, 0.1, 0.1, 0.0, 0.0],
+            [1.1, 0.9, 0.5, 0.2, 0.1],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    total_returns = torch.tensor([1.1, 0.1, 1.1, 0.0], dtype=torch.float32)
+    baseline = total_returns.mean()
+    scale = total_returns.std(unbiased=False) + 1e-6
+    expected_advantages = (expected_returns - baseline) / scale
+
+    assert torch.allclose(returns, expected_returns, atol=1e-6)
+    assert torch.allclose(advantages, expected_advantages, atol=1e-5)
+    assert advantages[0, 0] > advantages[0, 1] > advantages[0, 2]
+
+
+def test_compute_grpo_token_level_advantage_zeros_single_valid_position():
+    token_level_rewards = torch.tensor(
+        [
+            [0.5, 0.2, 0.1],
+            [0.2, 0.1, 0.0],
+            [0.1, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    response_mask = torch.tensor(
+        [
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    index = np.array(["g1", "g1", "g1"], dtype=object)
+
+    advantages, returns = compute_grpo_outcome_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+    )
+
+    expected_returns = torch.tensor(
+        [
+            [0.8, 0.3, 0.1],
+            [0.3, 0.1, 0.0],
+            [0.1, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+
+    assert torch.allclose(returns, expected_returns, atol=1e-6)
+    assert torch.allclose(advantages[:, 2], torch.zeros(3), atol=1e-6)
+    assert torch.allclose(advantages[2, 1:], torch.zeros(2), atol=1e-6)
 
 
 if __name__ == "__main__":
