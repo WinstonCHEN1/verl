@@ -4,7 +4,7 @@ set -x
 export WANDB_API_KEY="${WANDB_API_KEY:-wandb...}"
 
 clip_ratio_low=0.2
-clip_ratio_high=0.28
+clip_ratio_high=0.27
 
 val_temperature=0.7
 val_top_p=0.9
@@ -47,9 +47,9 @@ python3 -m verl.trainer.main_ppo \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${VAL_FILE}" \
     trainer.default_local_dir="${CKPT_DIR}" \
-    data.train_batch_size=1024 \
-    data.max_prompt_length=1000 \
-    data.max_response_length=15000 \
+    data.train_batch_size=768 \
+    data.max_prompt_length=2048 \
+    data.max_response_length=3072 \
     data.filter_overlong_prompts=True \
     data.filter_overlong_prompts_workers=32 \
     data.truncation='error' \
@@ -57,9 +57,9 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.lr=1e-6 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=128 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=192 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.actor.ppo_epochs=8 \
+    actor_rollout_ref.actor.ppo_epochs=1 \
     actor_rollout_ref.actor.use_kl_loss=False \
     actor_rollout_ref.actor.kl_loss_coef=0 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
@@ -70,7 +70,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.sum_pi_squared_checkpointing=False \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.n=8 \
@@ -92,8 +92,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.experiment_name='grpo_mmlu_qwen3_4b_thinking' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=${NNODES} \
-    trainer.save_freq=20 \
-    trainer.test_freq=5 \
+    trainer.save_freq=10 \
+    trainer.test_freq=10 \
     trainer.log_val_generations=1 \
     trainer.total_epochs=100 \
     custom_reward_function.path="${CUSTOM_REWARD_PATH}" \
