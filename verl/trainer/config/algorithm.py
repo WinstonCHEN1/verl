@@ -92,6 +92,7 @@ class TeacherStepRewardConfig(BaseConfig):
     sum_pi_squared_coef: float = 1.0
     teacher_avg_prob_coef: float = 1.0
     teacher_avg_prob_mode: str = "seq_freq_mean"
+    format_reward_coef: float = 0.1
     mix_rm_coef: float = 0.0
     normalize_per_sequence: bool = False
     eps: float = 1e-6

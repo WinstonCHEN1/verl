@@ -15,10 +15,14 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Any
 
 import numpy as np
 import torch
+
+
+FORMAT_PATTERN = re.compile(r"^\s*<think>.*?</think>\s*<answer>.*?</answer>\s*$", re.DOTALL)
 
 
 def _to_teacher_token_ids(teacher_sequence: Any, tokenizer: Any) -> list[int]:
@@ -40,6 +44,42 @@ def _to_teacher_token_ids(teacher_sequence: Any, tokenizer: Any) -> list[int]:
         return [int(x) for x in token_ids]
 
     return []
+
+
+def _has_single_ordered_think_answer_format(text: str) -> bool:
+    if not isinstance(text, str):
+        return False
+
+    if text.count("<think>") != 1 or text.count("</think>") != 1:
+        return False
+    if text.count("<answer>") != 1 or text.count("</answer>") != 1:
+        return False
+
+    return FORMAT_PATTERN.match(text) is not None
+
+
+def compute_format_reward_tensor(
+    responses: torch.Tensor,
+    response_mask: torch.Tensor,
+    tokenizer: Any,
+    reward_coef: float,
+) -> torch.Tensor:
+    format_reward = torch.zeros_like(response_mask, dtype=torch.float32)
+    if reward_coef == 0.0:
+        return format_reward
+
+    response_mask = response_mask.to(dtype=torch.float32)
+    response_lengths = response_mask.sum(dim=-1).to(dtype=torch.long)
+
+    for i, seq_len in enumerate(response_lengths.tolist()):
+        if seq_len <= 0:
+            continue
+
+        response_text = tokenizer.decode(responses[i, :seq_len].tolist(), skip_special_tokens=True)
+        if _has_single_ordered_think_answer_format(response_text):
+            format_reward[i, seq_len - 1] = float(reward_coef)
+
+    return format_reward
 
 
 def compute_teacher_frequency_tensor(
@@ -131,6 +171,14 @@ def compute_teacher_step_proxy_reward(
             )
         reward = reward + cfg.sum_pi_squared_coef * sum_pi_squared.to(dtype=torch.float32)
 
+    format_reward = compute_format_reward_tensor(
+        responses=responses,
+        response_mask=response_mask,
+        tokenizer=tokenizer,
+        reward_coef=float(getattr(cfg, "format_reward_coef", 0.1)),
+    )
+    reward = reward + format_reward
+
     reward = reward * response_mask
 
     if cfg.normalize_per_sequence:
@@ -149,6 +197,12 @@ def compute_teacher_step_proxy_reward(
             (teacher_avg_prob_proxy * response_mask).sum() / response_mask.sum().clamp_min(1.0)
         ).item(),
         "teacher_step_reward/pi_mean": ((pi_t * response_mask).sum() / response_mask.sum().clamp_min(1.0)).item(),
+        "teacher_step_reward/format_reward_mean": (
+            format_reward.sum() / response_mask.sum().clamp_min(1.0)
+        ).item(),
+        "teacher_step_reward/format_pass_rate": (
+            (format_reward.sum(dim=-1) > 0).to(dtype=torch.float32).mean().item()
+        ),
     }
     if sum_pi_squared is not None:
         sum_pi_squared_f = sum_pi_squared.to(dtype=torch.float32)

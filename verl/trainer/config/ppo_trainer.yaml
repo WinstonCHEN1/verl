@@ -214,6 +214,10 @@ algorithm:
     # AvgProb proxy mode: seq_freq_mean | none
     teacher_avg_prob_mode: seq_freq_mean
 
+    # Sequence-level bonus added on the last valid token when the response
+    # contains exactly one ordered <think>...</think><answer>...</answer> block
+    format_reward_coef: 0.1
+
     # Mix with existing rm reward:
     # final_reward = proxy_reward + mix_rm_coef * rm_reward
     mix_rm_coef: 0.0
