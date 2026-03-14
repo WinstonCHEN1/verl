@@ -194,6 +194,26 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, 
     return data, metrics
 
 
+def compute_kl_reward_tensor(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, kl_penalty="kl"):
+    """Compute the KL reward component without mixing it into token_level_scores."""
+    response_mask = data.batch["response_mask"]
+    batch_size = data.batch.batch_size[0]
+
+    kld = core_algos.kl_penalty(
+        data.batch["old_log_probs"], data.batch["ref_log_prob"], kl_penalty=kl_penalty
+    )
+    kld = kld * response_mask
+    beta = kl_ctrl.value
+    kl_reward = -beta * kld
+
+    current_kl = masked_mean(kld, mask=response_mask, axis=-1)
+    current_kl = torch.mean(current_kl, dim=0).item()
+    kl_ctrl.update(current_kl=current_kl, n_steps=batch_size)
+
+    metrics = {"actor/reward_kl_penalty": current_kl, "actor/reward_kl_penalty_coeff": beta}
+    return kl_reward, metrics
+
+
 def compute_response_mask(data: DataProto):
     """Compute the attention mask for the response part of the sequence.
 
@@ -210,6 +230,48 @@ def compute_response_mask(data: DataProto):
     response_length = responses.size(1)
     attention_mask = data.batch["attention_mask"]
     return attention_mask[:, -response_length:]
+
+
+def compute_advantages_and_returns(
+    data: DataProto,
+    token_level_rewards: torch.Tensor,
+    adv_estimator: AdvantageEstimator,
+    gamma: float = 1.0,
+    lam: float = 1.0,
+    num_repeat: int = 1,
+    norm_adv_by_std_in_grpo: bool = True,
+    config: Optional[AlgoConfig] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute advantages and returns for a provided reward tensor."""
+    if adv_estimator == AdvantageEstimator.GAE:
+        advantages, returns = core_algos.compute_gae_advantage_return(
+            token_level_rewards=token_level_rewards,
+            values=data.batch["values"],
+            response_mask=data.batch["response_mask"],
+            gamma=gamma,
+            lam=lam,
+        )
+    elif adv_estimator == AdvantageEstimator.GRPO:
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=token_level_rewards,
+            response_mask=data.batch["response_mask"],
+            index=data.non_tensor_batch["uid"],
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        )
+    else:
+        adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
+        adv_kwargs = {
+            "token_level_rewards": token_level_rewards,
+            "response_mask": data.batch["response_mask"],
+            "config": config,
+        }
+        if "uid" in data.non_tensor_batch:
+            adv_kwargs["index"] = data.non_tensor_batch["uid"]
+        if "reward_baselines" in data.batch:
+            adv_kwargs["reward_baselines"] = data.batch["reward_baselines"]
+        advantages, returns = adv_estimator_fn(**adv_kwargs)
+
+    return advantages, returns
 
 
 def compute_advantage(
@@ -242,53 +304,24 @@ def compute_advantage(
     # Back-compatible with trainers that do not compute response mask in fit
     if "response_mask" not in data.batch.keys():
         data.batch["response_mask"] = compute_response_mask(data)
-    # prepare response group
-    if adv_estimator == AdvantageEstimator.GAE:
-        # Compute advantages and returns using Generalized Advantage Estimation (GAE)
-        advantages, returns = core_algos.compute_gae_advantage_return(
-            token_level_rewards=data.batch["token_level_rewards"],
-            values=data.batch["values"],
-            response_mask=data.batch["response_mask"],
-            gamma=gamma,
-            lam=lam,
+    advantages, returns = compute_advantages_and_returns(
+        data=data,
+        token_level_rewards=data.batch["token_level_rewards"],
+        adv_estimator=adv_estimator,
+        gamma=gamma,
+        lam=lam,
+        num_repeat=num_repeat,
+        norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        config=config,
+    )
+    data.batch["advantages"] = advantages
+    data.batch["returns"] = returns
+    if adv_estimator == AdvantageEstimator.GAE and config.get("use_pf_ppo", False):
+        data = core_algos.compute_pf_ppo_reweight_data(
+            data,
+            config.pf_ppo.reweight_method,
+            config.pf_ppo.weight_pow,
         )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-        if config.get("use_pf_ppo", False):
-            data = core_algos.compute_pf_ppo_reweight_data(
-                data,
-                config.pf_ppo.reweight_method,
-                config.pf_ppo.weight_pow,
-            )
-    elif adv_estimator == AdvantageEstimator.GRPO:
-        # Initialize the mask for GRPO calculation
-        grpo_calculation_mask = data.batch["response_mask"]
-        # Call compute_grpo_outcome_advantage with parameters matching its definition
-        advantages, returns = core_algos.compute_grpo_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=grpo_calculation_mask,
-            index=data.non_tensor_batch["uid"],
-            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-        )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-    else:
-        # handle all other adv estimator type other than GAE and GRPO
-        adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
-        adv_kwargs = {
-            "token_level_rewards": data.batch["token_level_rewards"],
-            "response_mask": data.batch["response_mask"],
-            "config": config,
-        }
-        if "uid" in data.non_tensor_batch:  # optional
-            adv_kwargs["index"] = data.non_tensor_batch["uid"]
-        if "reward_baselines" in data.batch:  # optional
-            adv_kwargs["reward_baselines"] = data.batch["reward_baselines"]
-
-        # calculate advantage estimator
-        advantages, returns = adv_estimator_fn(**adv_kwargs)
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
     return data
 
 
@@ -1250,27 +1283,19 @@ class RayPPOTrainer:
 
                     with marked_timer("reward", timing_raw, color="yellow"):
                         teacher_step_reward_cfg = self.config.algorithm.teacher_step_reward
-                        use_teacher_only_reward = teacher_step_reward_cfg.enable and (
-                            float(teacher_step_reward_cfg.mix_rm_coef) == 0.0
-                        )
 
                         reward_extra_infos_dict: dict[str, list] = {}
-                        reward_tensor = torch.zeros_like(batch.batch["responses"], dtype=torch.float32)
+                        outcome_reward_tensor = torch.zeros_like(batch.batch["responses"], dtype=torch.float32)
 
-                        if use_teacher_only_reward:
-                            # In pure teacher-step mode, skip RM/reward_fn scoring to avoid
-                            # accidental dependency on final-result reward and save compute.
-                            pass
-                        else:
                         # compute reward model score
-                            if self.use_rm:
-                                batch_reward = self.rm_wg.compute_rm_score(batch)
-                                batch = batch.union(batch_reward)
+                        if self.use_rm:
+                            batch_reward = self.rm_wg.compute_rm_score(batch)
+                            batch = batch.union(batch_reward)
 
-                            if self.config.reward_model.launch_reward_fn_async:
-                                future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
-                            else:
-                                reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+                        if self.config.reward_model.launch_reward_fn_async:
+                            future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
+                        else:
+                            outcome_reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
@@ -1327,51 +1352,82 @@ class RayPPOTrainer:
                             batch = batch.union(values)
 
                     with marked_timer("adv", timing_raw, color="brown"):
-                        # we combine with rule-based rm
-                        if not use_teacher_only_reward:
-                            if self.config.reward_model.launch_reward_fn_async:
-                                reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
-                            elif self.use_rm:
-                                reward_tensor, reward_extra_infos_dict = extract_reward(batch)
+                        if self.config.reward_model.launch_reward_fn_async:
+                            outcome_reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
+                        elif self.use_rm:
+                            outcome_reward_tensor, reward_extra_infos_dict = extract_reward(batch)
 
+                        reward_components: list[tuple[str, torch.Tensor]] = [("outcome", outcome_reward_tensor)]
                         if teacher_step_reward_cfg.enable:
                             teacher_reward_tensor, teacher_reward_metrics = self._compute_teacher_step_reward(batch)
                             metrics.update(teacher_reward_metrics)
-                            mix_rm_coef = float(teacher_step_reward_cfg.mix_rm_coef)
-                            if mix_rm_coef != 0.0:
-                                reward_tensor = teacher_reward_tensor + mix_rm_coef * reward_tensor
-                            else:
-                                reward_tensor = teacher_reward_tensor
+                            reward_components.append(("teacher", teacher_reward_tensor))
 
-                        batch.batch["token_level_scores"] = reward_tensor
+                        total_score_tensor = torch.zeros_like(outcome_reward_tensor)
+                        for _, component_reward in reward_components:
+                            total_score_tensor = total_score_tensor + component_reward
+
+                        batch.batch["token_level_scores"] = total_score_tensor
 
                         if reward_extra_infos_dict:
                             batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
 
-                        # compute rewards. apply_kl_penalty if available
+                        kl_reward_tensor = None
                         if self.config.algorithm.use_kl_in_reward:
-                            batch, kl_metrics = apply_kl_penalty(
-                                batch, kl_ctrl=self.kl_ctrl_in_reward, kl_penalty=self.config.algorithm.kl_penalty
+                            kl_reward_tensor, kl_metrics = compute_kl_reward_tensor(
+                                batch,
+                                kl_ctrl=self.kl_ctrl_in_reward,
+                                kl_penalty=self.config.algorithm.kl_penalty,
                             )
                             metrics.update(kl_metrics)
+                            batch.batch["token_level_rewards"] = batch.batch["token_level_scores"] + kl_reward_tensor
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
-
-                        # compute advantages, executed on the driver process
 
                         norm_adv_by_std_in_grpo = self.config.algorithm.get(
                             "norm_adv_by_std_in_grpo", True
                         )  # GRPO adv normalization factor
+                        if kl_reward_tensor is not None:
+                            reward_components.append(("kl", kl_reward_tensor))
 
-                        batch = compute_advantage(
-                            batch,
-                            adv_estimator=self.config.algorithm.adv_estimator,
-                            gamma=self.config.algorithm.gamma,
-                            lam=self.config.algorithm.lam,
-                            num_repeat=self.config.actor_rollout_ref.rollout.n,
-                            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-                            config=self.config.algorithm,
-                        )
+                        if len(reward_components) == 1:
+                            batch = compute_advantage(
+                                batch,
+                                adv_estimator=self.config.algorithm.adv_estimator,
+                                gamma=self.config.algorithm.gamma,
+                                lam=self.config.algorithm.lam,
+                                num_repeat=self.config.actor_rollout_ref.rollout.n,
+                                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                                config=self.config.algorithm,
+                            )
+                        else:
+                            total_advantages = torch.zeros_like(batch.batch["token_level_rewards"])
+                            total_returns = torch.zeros_like(batch.batch["token_level_rewards"])
+
+                            for _, component_reward in reward_components:
+                                component_advantages, component_returns = compute_advantages_and_returns(
+                                    data=batch,
+                                    token_level_rewards=component_reward,
+                                    adv_estimator=self.config.algorithm.adv_estimator,
+                                    gamma=self.config.algorithm.gamma,
+                                    lam=self.config.algorithm.lam,
+                                    num_repeat=self.config.actor_rollout_ref.rollout.n,
+                                    norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                                    config=self.config.algorithm,
+                                )
+                                total_advantages = total_advantages + component_advantages
+                                total_returns = total_returns + component_returns
+
+                            batch.batch["advantages"] = total_advantages
+                            batch.batch["returns"] = total_returns
+                            if self.config.algorithm.adv_estimator == AdvantageEstimator.GAE and self.config.algorithm.get(
+                                "use_pf_ppo", False
+                            ):
+                                batch = core_algos.compute_pf_ppo_reweight_data(
+                                    batch,
+                                    self.config.algorithm.pf_ppo.reweight_method,
+                                    self.config.algorithm.pf_ppo.weight_pow,
+                                )
 
                     # update critic
                     if self.use_critic:
