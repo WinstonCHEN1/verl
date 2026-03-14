@@ -102,6 +102,7 @@ class TestAlgoConfig(unittest.TestCase):
         self.assertFalse(config.use_kl_in_reward)  # default value
         self.assertEqual(config.kl_penalty, "kl")  # default value
         self.assertFalse(config.use_pf_ppo)  # default value
+        self.assertEqual(config.teacher_step_reward.format_reward_coef, 0.1)
 
     def test_get_method_backward_compatibility(self):
         """Test the get method for backward compatibility."""
