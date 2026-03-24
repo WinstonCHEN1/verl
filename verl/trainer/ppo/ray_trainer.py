@@ -1358,10 +1358,22 @@ class RayPPOTrainer:
                             outcome_reward_tensor, reward_extra_infos_dict = extract_reward(batch)
 
                         reward_components: list[tuple[str, torch.Tensor]] = [("outcome", outcome_reward_tensor)]
-                        if teacher_step_reward_cfg.enable:
+                        # Check if teacher step reward should be enabled (consider warmup steps)
+                        enable_after_steps = getattr(teacher_step_reward_cfg, "enable_after_steps", 0)
+                        teacher_step_reward_enabled = (
+                            teacher_step_reward_cfg.enable and
+                            self.global_steps >= enable_after_steps
+                        )
+                        if teacher_step_reward_enabled:
                             teacher_reward_tensor, teacher_reward_metrics = self._compute_teacher_step_reward(batch)
                             metrics.update(teacher_reward_metrics)
                             reward_components.append(("teacher", teacher_reward_tensor))
+                            # Log when teacher step reward is active
+                            metrics["teacher_step_reward/active"] = 1.0
+                        else:
+                            metrics["teacher_step_reward/active"] = 0.0
+                            if teacher_step_reward_cfg.enable and self.global_steps < enable_after_steps:
+                                metrics["teacher_step_reward/warmup_remaining"] = enable_after_steps - self.global_steps
 
                         total_score_tensor = torch.zeros_like(outcome_reward_tensor)
                         for _, component_reward in reward_components:

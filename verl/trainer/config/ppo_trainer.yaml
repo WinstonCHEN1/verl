@@ -228,6 +228,12 @@ algorithm:
     # Numerical epsilon
     eps: 1e-6
 
+    # Global repeat penalty coefficient (applies regardless of format validity)
+    global_repeat_penalty_coef: 0.1
+
+    # Warmup steps before enabling teacher step reward (0 = disable, start immediately)
+    enable_after_steps: 0
+
 # config for the trainer
 trainer:
 
