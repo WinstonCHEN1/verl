@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /mnt/ali-sh-1/usr/lihaitao/chenguo/sum_outcome/verl/ -maxdepth 3 -name checkpoint* -o -name ckpt* -o -name global_step* -o -name model* -type d)",
+      "Bash(sort -t: -k2 -n)"
+    ]
+  }
+}

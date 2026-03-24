@@ -295,11 +295,12 @@ def compute_grpo_outcome_advantage(
         for idx, idx_list in id2indices.items():
             group_returns = token_level_returns[idx_list]
             group_mask = response_mask_f[idx_list]
-            group_total_returns = group_returns[:, 0]
 
-            baseline = group_total_returns.mean()
+            # Position-aware baseline: compute mean/std per position (column-wise)
+            # This ensures each position is compared to its own expected return
+            baseline = group_returns.mean(dim=0, keepdim=True)
             if norm_adv_by_std_in_grpo:
-                scale = group_total_returns.std(unbiased=False) + epsilon
+                scale = group_returns.std(dim=0, keepdim=True, unbiased=False) + epsilon
             else:
                 scale = torch.tensor(1.0, dtype=group_returns.dtype, device=group_returns.device)
 

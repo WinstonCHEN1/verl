@@ -96,6 +96,14 @@ class TeacherStepRewardConfig(BaseConfig):
     mix_rm_coef: float = 0.0
     normalize_per_sequence: bool = False
     eps: float = 1e-6
+    # New parameters for sequence-level imitation reward (from clean repo)
+    position_coef: float = 1.0
+    repeat_penalty_coef: float = 0.1
+    length_coef: float = 0.1
+    # Global repeat penalty (applies regardless of format validity)
+    global_repeat_penalty_coef: float = 0.1
+    # Warmup steps before enabling teacher step reward (0 = disable)
+    enable_after_steps: int = 0
 
 
 @dataclass
